@@ -1,0 +1,23 @@
+{
+  "name": "big-video",
+  "packageManager": "yarn@4.3.1",
+  "scripts": {
+    "build": "webpack --config webpack.config.mjs",
+    "watch": "webpack --config webpack.config.mjs --watch",
+    "dev": "webpack --config webpack.config.mjs --mode=development --watch --env TMPDIR/home/lightberry/bucket/big-video/tmp"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "@types/firefox-webext-browser": "^120.0.4",
+    "clean-webpack-plugin": "^4.0.0",
+    "copy-webpack-plugin": "^12.0.2",
+    "html-webpack-plugin": "^5.6.3",
+    "ts-loader": "^9.5.1",
+    "web-ext-plugin": "^2.10.0",
+    "webpack": "^5.96.1",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "typescript": "^5.6.3"
+  }
+}
