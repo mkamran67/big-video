@@ -2,10 +2,162 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
+    <title>Big Video</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 272px;
+        background: #0c0c1a;
+        color: #dde0ff;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        overflow: hidden;
+      }
+
+      /* Header */
+      .header {
+        display: flex; align-items: center; gap: 11px;
+        padding: 16px 16px 14px;
+        border-bottom: 1px solid rgba(110,110,220,0.18);
+      }
+      .header-icon {
+        width: 36px; height: 36px; flex-shrink: 0;
+        background: linear-gradient(135deg,#2a2a6e,#1a1a40);
+        border: 1px solid rgba(110,110,220,0.35); border-radius: 10px;
+        display: flex; align-items: center; justify-content: center; font-size: 18px;
+      }
+      .header-title { font-size: 14px; font-weight: 700; }
+      .header-sub   { font-size: 11px; color: rgba(180,180,220,0.45); margin-top: 2px; }
+
+      /* Sections */
+      .section { padding: 14px 16px; }
+      .section + .section { border-top: 1px solid rgba(110,110,220,0.12); }
+      .section-label {
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.1em; color: rgba(180,180,220,0.4); margin-bottom: 10px;
+      }
+      .section-label span {
+        float: right; text-transform: none; letter-spacing: 0;
+        font-size: 10px; font-weight: 500;
+        color: rgba(140,140,200,0.55);
+      }
+
+      /* Position picker frame */
+      .frame-wrap {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(110,110,220,0.2);
+        border-radius: 10px; aspect-ratio: 16/9;
+        position: relative; overflow: hidden; margin-bottom: 10px;
+      }
+      .frame-wrap::before {
+        content: ''; position: absolute; inset: 0;
+        background: repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(110,110,220,0.03) 3px,rgba(110,110,220,0.03) 4px);
+        pointer-events: none;
+      }
+      .frame-center {
+        position: absolute; inset: 0; display: flex;
+        align-items: center; justify-content: center;
+        font-size: 28px; color: rgba(110,110,220,0.12);
+        pointer-events: none; user-select: none;
+      }
+      .pos-btn {
+        position: absolute; width: 34px; height: 34px;
+        background: rgba(100,100,200,0.08); border: 1px solid rgba(110,110,220,0.22);
+        border-radius: 50%; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 15px; color: rgba(180,180,220,0.4);
+        transition: background 160ms,border-color 160ms,color 160ms,box-shadow 160ms,transform 160ms;
+      }
+      .pos-btn:hover { background:rgba(100,100,220,0.2); border-color:rgba(110,110,255,0.5); color:#c8c8ff; transform:scale(1.08); }
+      .pos-btn.active { background:rgba(90,90,220,0.35); border-color:rgba(120,120,255,0.9); color:#fff; box-shadow:0 0 14px rgba(100,100,255,0.45); }
+      .pos-btn[data-pos="top-left"]     { top:8px;    left:8px; }
+      .pos-btn[data-pos="top-right"]    { top:8px;    right:8px; }
+      .pos-btn[data-pos="bottom-left"]  { bottom:8px; left:8px; }
+      .pos-btn[data-pos="bottom-right"] { bottom:8px; right:8px; }
+      .pos-label { font-size:12px; color:rgba(180,180,220,0.5); text-align:center; }
+      .pos-label strong { color:#a0a0ff; font-weight:600; }
+
+      /* Picker button */
+      .picker-btn {
+        display: flex; align-items: center; gap: 8px; width: 100%;
+        padding: 8px 12px;
+        background: rgba(100,100,200,0.1); border: 1px solid rgba(110,110,220,0.25);
+        border-radius: 8px; color: #c0c0ff; cursor: pointer;
+        font-size: 12px; font-weight: 600; font-family: inherit;
+        transition: background 160ms, border-color 160ms;
+        margin-bottom: 10px;
+      }
+      .picker-btn:hover { background:rgba(100,100,220,0.2); border-color:rgba(110,110,255,0.5); }
+      .picker-btn .icon { font-size: 14px; }
+
+      /* Selectors list */
+      .selectors-list { display: flex; flex-direction: column; gap: 5px; max-height: 140px; overflow-y: auto; }
+      .selectors-list::-webkit-scrollbar { width: 4px; }
+      .selectors-list::-webkit-scrollbar-track { background: transparent; }
+      .selectors-list::-webkit-scrollbar-thumb { background: rgba(100,100,200,0.3); border-radius: 2px; }
+      .selector-item {
+        display: flex; align-items: center; gap: 6px;
+        padding: 5px 8px;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(110,110,220,0.15);
+        border-radius: 6px;
+      }
+      .selector-text {
+        flex: 1; font-size: 11px; color: rgba(200,200,240,0.7);
+        font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .del-btn {
+        flex-shrink: 0; width: 18px; height: 18px; padding: 0;
+        background: rgba(200,60,60,0.15); border: 1px solid rgba(200,60,60,0.25);
+        border-radius: 4px; color: rgba(255,120,120,0.8); cursor: pointer;
+        font-size: 10px; line-height: 1; display: flex; align-items: center; justify-content: center;
+        transition: background 140ms;
+      }
+      .del-btn:hover { background: rgba(200,60,60,0.35); color: #ff8888; }
+      .empty-msg { font-size: 11px; color: rgba(180,180,220,0.3); text-align: center; padding: 6px 0; }
+
+      /* Footer */
+      .footer {
+        padding: 9px 16px 11px;
+        border-top: 1px solid rgba(110,110,220,0.12);
+        font-size: 10px; color: rgba(180,180,220,0.25); text-align: center;
+      }
+    </style>
   </head>
   <body>
-    <p>potato</p>
+    <div class="header">
+      <div class="header-icon">🎬</div>
+      <div>
+        <div class="header-title">Big Video</div>
+        <div class="header-sub">Expand embedded videos</div>
+      </div>
+    </div>
+
+    <!-- Position section -->
+    <div class="section">
+      <div class="section-label">Expand Button Position</div>
+      <div class="frame-wrap">
+        <div class="frame-center">▶</div>
+        <button class="pos-btn" data-pos="top-left"     title="Top Left">↖</button>
+        <button class="pos-btn" data-pos="top-right"    title="Top Right">↗</button>
+        <button class="pos-btn" data-pos="bottom-left"  title="Bottom Left">↙</button>
+        <button class="pos-btn" data-pos="bottom-right" title="Bottom Right">↘</button>
+      </div>
+      <p class="pos-label">Position: <strong id="pos-label">Top Right</strong></p>
+    </div>
+
+    <!-- Element hider section -->
+    <div class="section">
+      <div class="section-label">
+        Hide Elements on Expand
+        <span id="domain-badge"></span>
+      </div>
+      <button class="picker-btn" id="picker-btn">
+        <span class="icon">🎯</span> Pick elements to hide
+      </button>
+      <div class="selectors-list" id="selectors-list">
+        <p class="empty-msg">No elements hidden for this site</p>
+      </div>
+    </div>
+
+    <div class="footer">Changes apply instantly · hidden elements saved per site</div>
   </body>
 </html>
