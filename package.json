@@ -4,7 +4,8 @@
   "scripts": {
     "build": "webpack --config webpack.config.mjs",
     "watch": "webpack --config webpack.config.mjs --watch",
-    "dev": "webpack --config webpack.config.mjs --mode=development --watch --env TMPDIR/home/lightberry/bucket/big-video/tmp"
+    "dev": "webpack --config webpack.config.mjs --mode=development --watch --env TMPDIR/home/lightberry/bucket/big-video/tmp",
+    "package": "./package.sh"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",
