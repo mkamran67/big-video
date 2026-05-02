@@ -1,7 +1,9 @@
 type ButtonPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 const STORAGE_KEY = "buttonPosition";
+const STORAGE_KEY_SHRINK = "autoShrinkOnEnd";
 const HIDDEN_PREFIX = "bv_hidden_";
+const AUTO_EXPAND_PREFIX = "autoExpand_";
 const DEFAULT_POSITION: ButtonPosition = "top-right";
 
 const LABELS: Record<ButtonPosition, string> = {
@@ -67,6 +69,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // Auto-shrink toggle
+  const shrinkToggle = document.getElementById("auto-shrink-toggle") as HTMLInputElement | null;
+  if (shrinkToggle) {
+    chrome.storage.sync.get({ [STORAGE_KEY_SHRINK]: false }, (result) => {
+      shrinkToggle.checked = result[STORAGE_KEY_SHRINK] as boolean;
+    });
+    shrinkToggle.addEventListener("change", () => {
+      chrome.storage.sync.set({ [STORAGE_KEY_SHRINK]: shrinkToggle.checked });
+    });
+  }
+
   // Element hider
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
     if (!tab?.url || !tab.id) return;
@@ -77,6 +90,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (badge) badge.textContent = domain;
 
     const storageKey = HIDDEN_PREFIX + domain;
+    const autoExpandKey = AUTO_EXPAND_PREFIX + domain;
 
     // Load initial list
     chrome.storage.sync.get({ [storageKey]: [] }, (result) => {
@@ -89,6 +103,19 @@ document.addEventListener("DOMContentLoaded", () => {
         renderList(changes[storageKey].newValue as string[], domain);
       }
     });
+
+    // Auto-expand toggle (per domain)
+    const autoExpandToggle = document.getElementById("auto-expand-toggle") as HTMLInputElement | null;
+    const autoExpandLabel  = document.getElementById("auto-expand-domain-label");
+    if (autoExpandLabel) autoExpandLabel.textContent = `Auto-expand for ${domain}`;
+    if (autoExpandToggle) {
+      chrome.storage.sync.get({ [autoExpandKey]: false }, (result) => {
+        autoExpandToggle.checked = result[autoExpandKey] as boolean;
+      });
+      autoExpandToggle.addEventListener("change", () => {
+        chrome.storage.sync.set({ [autoExpandKey]: autoExpandToggle.checked });
+      });
+    }
 
     // Picker button — sends message then popup auto-closes
     document.getElementById("picker-btn")?.addEventListener("click", () => {

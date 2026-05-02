@@ -6,16 +6,23 @@ const Z_TOP = 2147483647;
 const BTN_SIZE = 36;
 const BTN_MARGIN = 10;
 const STORAGE_KEY = "buttonPosition";
+const STORAGE_KEY_SHRINK = "autoShrinkOnEnd";
 const HIDDEN_PREFIX = "bv_hidden_";
+const AUTO_EXPAND_PREFIX = "autoExpand_";
 const DEFAULT_POSITION: ButtonPosition = "top-right";
 const domain = window.location.hostname;
 
 let currentPosition: ButtonPosition = DEFAULT_POSITION;
+let autoShrinkOnEnd: boolean = false;
+let autoExpandOnDomain: boolean = false;
+let autoExpandFired: boolean = false; // ensure only first iframe auto-expands per page load
 const repositionFns: Array<() => void> = [];
 
-chrome.storage.sync.get({ [STORAGE_KEY]: DEFAULT_POSITION, [HIDDEN_PREFIX + domain]: [] }, (result) => {
+chrome.storage.sync.get({ [STORAGE_KEY]: DEFAULT_POSITION, [HIDDEN_PREFIX + domain]: [], [STORAGE_KEY_SHRINK]: false, [AUTO_EXPAND_PREFIX + domain]: false }, (result) => {
   currentPosition = result[STORAGE_KEY] as ButtonPosition;
   cachedHiddenSelectors = result[HIDDEN_PREFIX + domain] as string[];
+  autoShrinkOnEnd = result[STORAGE_KEY_SHRINK] as boolean;
+  autoExpandOnDomain = result[AUTO_EXPAND_PREFIX + domain] as boolean;
   repositionFns.forEach((fn) => fn());
 });
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -26,6 +33,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (changes[HIDDEN_PREFIX + domain]) {
     cachedHiddenSelectors = changes[HIDDEN_PREFIX + domain].newValue as string[];
+  }
+  if (changes[STORAGE_KEY_SHRINK]) {
+    autoShrinkOnEnd = changes[STORAGE_KEY_SHRINK].newValue as boolean;
+  }
+  if (changes[AUTO_EXPAND_PREFIX + domain]) {
+    autoExpandOnDomain = changes[AUTO_EXPAND_PREFIX + domain].newValue as boolean;
+    // Reset fired flag whenever the setting is toggled so a new decision takes effect
+    if (!autoExpandOnDomain) autoExpandFired = false;
   }
 });
 
@@ -83,14 +98,27 @@ let hiddenStyleEl: HTMLStyleElement | null = null;
 
 /** Inject a <style> tag that hides all saved selectors with !important rules.
  *  A style tag wins against every cascade layer, including !important in stylesheets. */
-function applyHiddenSelectors(): void {
-  if (cachedHiddenSelectors.length === 0) return;
-  hiddenStyleEl = document.createElement("style");
-  hiddenStyleEl.setAttribute("data-bv-hidden", "true");
-  hiddenStyleEl.textContent = cachedHiddenSelectors
+function buildHiddenCSS(selectors: string[]): string {
+  return selectors
     .map((sel) => `${sel} { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`)
     .join("\n");
+}
+
+function applyHiddenSelectors(): void {
+  if (cachedHiddenSelectors.length === 0) return;
+  // Remove any previously injected tag before creating a new one so repeated
+  // expand → shrink → expand cycles don't accumulate orphaned <style> tags.
+  hiddenStyleEl?.remove();
+  hiddenStyleEl = document.createElement("style");
+  hiddenStyleEl.setAttribute("data-bv-hidden", "true");
+  hiddenStyleEl.textContent = buildHiddenCSS(cachedHiddenSelectors);
   document.head.appendChild(hiddenStyleEl);
+}
+
+/** Patch the live <style> tag so elements hide/show immediately while expanded. */
+function refreshHiddenSelectors(selectors: string[]): void {
+  if (!hiddenStyleEl) return; // not currently expanded — nothing to do
+  hiddenStyleEl.textContent = buildHiddenCSS(selectors);
 }
 
 function removeHiddenSelectors(): void {
@@ -158,6 +186,8 @@ function onPickerClick(e: MouseEvent): void {
     pickerSelectors.add(sel);
     document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true"));
   }
+  // Immediately hide/show the element if the video is currently expanded.
+  refreshHiddenSelectors(Array.from(pickerSelectors));
 }
 function onPickerKey(e: KeyboardEvent): void { if (e.key === "Escape") stopPicker(); }
 
@@ -168,6 +198,9 @@ function stopPicker(): void {
   // without waiting for storage.onChanged to fire.
   cachedHiddenSelectors = Array.from(pickerSelectors);
   chrome.storage.sync.set({ [HIDDEN_PREFIX + domain]: cachedHiddenSelectors });
+  // If the video is currently expanded, patch the live <style> tag immediately
+  // so elements disappear without requiring a shrink → re-expand cycle.
+  refreshHiddenSelectors(cachedHiddenSelectors);
   document.querySelectorAll("[data-bv-hover],[data-bv-selected]").forEach((el) => {
     el.removeAttribute("data-bv-hover"); el.removeAttribute("data-bv-selected");
   });
@@ -184,10 +217,23 @@ function startPicker(): void {
   if (pickerActive) return;
   pickerActive = true;
 
+  // Reset the working set immediately (before the async storage read) so that
+  // clicks registered before the callback fires are not lost when the Set
+  // reference is replaced.
+  pickerSelectors = new Set(cachedHiddenSelectors);
+  pickerSelectors.forEach((sel) => {
+    try { document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true")); } catch { /**/ }
+  });
+
+  // Sync with storage in case another tab updated the list after our last
+  // cachedHiddenSelectors refresh, then merge any extra selectors in.
   chrome.storage.sync.get({ [HIDDEN_PREFIX + domain]: [] }, (result) => {
-    pickerSelectors = new Set(result[HIDDEN_PREFIX + domain] as string[]);
-    pickerSelectors.forEach((sel) => {
-      try { document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true")); } catch { /**/ }
+    const stored = result[HIDDEN_PREFIX + domain] as string[];
+    stored.forEach((sel) => {
+      if (!pickerSelectors.has(sel)) {
+        pickerSelectors.add(sel);
+        try { document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true")); } catch { /**/ }
+      }
     });
   });
 
@@ -247,7 +293,7 @@ function createShrinkButton(): HTMLButtonElement {
   btn.title = "Restore original size";
   btn.innerText = "✕";
   Object.assign(btn.style, {
-    position: "fixed", top: "12px", right: "12px", zIndex: String(Z_TOP), display: "none",
+    position: "fixed", zIndex: String(Z_TOP), display: "none",
     width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px`, padding: "0",
     background: "rgba(10,10,20,0.75)", backdropFilter: "blur(8px)",
     color: "#e0e0ff", border: "1px solid rgba(120,120,255,0.4)", borderRadius: "50%",
@@ -290,23 +336,41 @@ function attachButton(iframe: HTMLIFrameElement): void {
   document.body.appendChild(expandBtn);
   document.body.appendChild(shrinkBtn);
 
-  const updateExpandBtnPos = () => {
-    if (expandBtn.style.display === "none") return;
+  /** Positions both the expand button (when visible) and the shrink button
+   *  (when visible) to the current corner. Safe to call at any time. */
+  const updateBtnPositions = () => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // ── Expand button: tracks the iframe corner while not expanded ──
     const rect = iframe.getBoundingClientRect();
-    const inViewport = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
-    expandBtn.style.visibility = inViewport ? "visible" : "hidden";
-    if (!inViewport) return;
-    const top = currentPosition.startsWith("top") ? rect.top + BTN_MARGIN : rect.bottom - BTN_SIZE - BTN_MARGIN;
-    const left = currentPosition.endsWith("left") ? rect.left + BTN_MARGIN : rect.right - BTN_SIZE - BTN_MARGIN;
-    expandBtn.style.top = `${top}px`;
-    expandBtn.style.left = `${left}px`;
+    const inViewport = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < vh && rect.left < vw;
+    if (expandBtn.style.display !== "none") {
+      expandBtn.style.visibility = inViewport ? "visible" : "hidden";
+    }
+    const btnTop  = currentPosition.startsWith("top")  ? rect.top    + BTN_MARGIN : rect.bottom - BTN_SIZE - BTN_MARGIN;
+    const btnLeft = currentPosition.endsWith("left")   ? rect.left   + BTN_MARGIN : rect.right  - BTN_SIZE - BTN_MARGIN;
+    expandBtn.style.top  = `${btnTop}px`;
+    expandBtn.style.left = `${btnLeft}px`;
+
+    // ── Shrink button: tracks the chosen corner of the full viewport ──
+    const sTop  = currentPosition.startsWith("top")  ? BTN_MARGIN                  : vh - BTN_SIZE - BTN_MARGIN;
+    const sLeft = currentPosition.endsWith("left")   ? BTN_MARGIN                  : vw - BTN_SIZE - BTN_MARGIN;
+    shrinkBtn.style.top  = `${sTop}px`;
+    shrinkBtn.style.left = `${sLeft}px`;
+    // Clear old inset shorthands set by the original hardcoded style.
+    shrinkBtn.style.right  = "";
+    shrinkBtn.style.bottom = "";
   };
 
-  repositionFns.push(updateExpandBtnPos);
-  requestAnimationFrame(updateExpandBtnPos);
-  window.addEventListener("scroll", updateExpandBtnPos, { passive: true, capture: true });
-  window.addEventListener("resize", updateExpandBtnPos, { passive: true });
-  new ResizeObserver(updateExpandBtnPos).observe(document.body);
+  // Alias so existing repositionFns registration still works.
+  const updateExpandBtnPos = updateBtnPositions;
+
+  repositionFns.push(updateBtnPositions);
+  requestAnimationFrame(updateBtnPositions);
+  window.addEventListener("scroll", updateBtnPositions, { passive: true, capture: true });
+  window.addEventListener("resize", updateBtnPositions, { passive: true });
+  new ResizeObserver(updateBtnPositions).observe(document.body);
 
   const savedStyles = {
     width: iframe.style.width, height: iframe.style.height, position: iframe.style.position,
@@ -330,6 +394,7 @@ function attachButton(iframe: HTMLIFrameElement): void {
     shrinkBtn.style.display = "flex";
     shrinkBtn.style.alignItems = "center";
     shrinkBtn.style.justifyContent = "center";
+    updateBtnPositions(); // position shrink btn to correct corner immediately
   };
 
   const shrink = () => {
@@ -348,9 +413,143 @@ function attachButton(iframe: HTMLIFrameElement): void {
     requestAnimationFrame(updateExpandBtnPos);
   };
 
-  expandBtn.addEventListener("click", expand);
-  shrinkBtn.addEventListener("click", shrink);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && shrinkBtn.style.display !== "none") shrink(); });
+  // ── Auto-shrink on video end ──────────────────────────────────────────────
+  // Four independent strategies fire in parallel; whichever triggers first wins.
+
+  let autoShrinkVideoEl: HTMLVideoElement | null = null;
+  let autoShrinkMsgHandler: ((e: MessageEvent) => void) | null = null;
+  let autoShrinkPollId: ReturnType<typeof setInterval> | null = null;
+  let autoShrinkTriggered = false; // prevent double-shrink if multiple strategies fire at once
+
+  /** Called by any strategy when it detects the video has ended. */
+  function onVideoEnded(): void {
+    if (!autoShrinkOnEnd || shrinkBtn.style.display === "none") return;
+    if (autoShrinkTriggered) return;
+    autoShrinkTriggered = true;
+    detachAutoShrinkListeners();
+    shrink();
+  }
+
+  function attachAutoShrinkListeners(): void {
+    if (!autoShrinkOnEnd) return;
+    autoShrinkTriggered = false;
+
+    // ── Strategy 1: Same-origin — attach `ended` event + near-end poll ──────
+    try {
+      const doc = iframe.contentDocument;
+      if (doc) {
+        const vid = doc.querySelector<HTMLVideoElement>("video");
+        if (vid) {
+          autoShrinkVideoEl = vid;
+          vid.addEventListener("ended", onVideoEnded, { once: true });
+
+          // Poll fallback: catches cases where `ended` already fired or is unreliable.
+          autoShrinkPollId = setInterval(() => {
+            if (!vid.duration || vid.paused || vid.ended) {
+              if (vid.ended) onVideoEnded();
+              return;
+            }
+            // Trigger when within 0.5 s of the end.
+            if (vid.duration - vid.currentTime <= 0.5) onVideoEnded();
+          }, 500);
+        }
+      }
+    } catch {
+      // Cross-origin — expected.
+    }
+
+    // ── Strategy 2: YouTube — inject enablejsapi + send listening handshake ──
+    // Without enablejsapi=1 in the src, YouTube won't emit postMessage events.
+    const src = iframe.src;
+    if (/youtube\.com\/embed|youtu\.be/.test(src) && iframe.contentWindow) {
+      try {
+        const url = new URL(src);
+        if (!url.searchParams.has("enablejsapi")) {
+          url.searchParams.set("enablejsapi", "1");
+          // Reassigning src reloads the iframe, so only do it once per session.
+          if (!iframe.dataset.bvJsApi) {
+            iframe.dataset.bvJsApi = "1";
+            iframe.src = url.toString();
+          }
+        }
+        // Send the listening handshake after a short delay (allow the player to load).
+        setTimeout(() => {
+          iframe.contentWindow?.postMessage(JSON.stringify({ event: "listening" }), "*");
+        }, 1500);
+      } catch { /* invalid URL */ }
+    }
+
+    // ── Strategy 3: postMessage — all major platforms ─────────────────────────
+    autoShrinkMsgHandler = (e: MessageEvent) => {
+      if (shrinkBtn.style.display === "none") return;
+      try {
+        let parsed: Record<string, unknown> | null = null;
+
+        if (typeof e.data === "string") {
+          try { parsed = JSON.parse(e.data) as Record<string, unknown>; } catch { return; }
+        } else if (typeof e.data === "object" && e.data !== null) {
+          parsed = e.data as Record<string, unknown>;
+        }
+
+        if (!parsed) return;
+
+        // YouTube IFrame API: playerState 0 = ended
+        //   With enablejsapi: { event:"onStateChange", info:0 }
+        //   Also seen:        { event:"infoDelivery", info:{ playerState:0 } }
+        if (parsed["event"] === "onStateChange" && parsed["info"] === 0) { onVideoEnded(); return; }
+        if (parsed["event"] === "infoDelivery") {
+          const info = parsed["info"] as Record<string, unknown> | undefined;
+          if (info && info["playerState"] === 0) { onVideoEnded(); return; }
+        }
+
+        // Vimeo Player SDK: { event:"finish" } or { method:"finish" }
+        if (parsed["event"] === "finish" || parsed["method"] === "finish") { onVideoEnded(); return; }
+
+        // Dailymotion: { type:"video_end" }
+        if (parsed["type"] === "video_end") { onVideoEnded(); return; }
+
+        // Twitch / generic: look for a "ended" or "end" signal
+        if (parsed["type"] === "video.ended" || parsed["event"] === "ended" || parsed["event"] === "end") { onVideoEnded(); return; }
+
+        // Wistia: { type:"betweentimes", ... } — no clean ended event; rely on poll.
+        // Streamable / Loom / others: check for a "complete" field
+        if (parsed["event"] === "complete" || parsed["type"] === "complete") { onVideoEnded(); return; }
+
+      } catch { /* ignore */ }
+    };
+    window.addEventListener("message", autoShrinkMsgHandler);
+  }
+
+  function detachAutoShrinkListeners(): void {
+    if (autoShrinkVideoEl) {
+      autoShrinkVideoEl.removeEventListener("ended", onVideoEnded);
+      autoShrinkVideoEl = null;
+    }
+    if (autoShrinkMsgHandler) {
+      window.removeEventListener("message", autoShrinkMsgHandler);
+      autoShrinkMsgHandler = null;
+    }
+    if (autoShrinkPollId !== null) {
+      clearInterval(autoShrinkPollId);
+      autoShrinkPollId = null;
+    }
+  }
+
+  expandBtn.addEventListener("click", () => { expand(); attachAutoShrinkListeners(); });
+  shrinkBtn.addEventListener("click", () => { detachAutoShrinkListeners(); shrink(); });
+
+  // ── Auto-expand on domain ────────────────────────────────────────────────
+  // Delay slightly to ensure the iframe is rendered before we expand.
+  if (autoExpandOnDomain && !autoExpandFired) {
+    autoExpandFired = true;
+    requestAnimationFrame(() => { expand(); attachAutoShrinkListeners(); });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && shrinkBtn.style.display !== "none") {
+      detachAutoShrinkListeners();
+      shrink();
+    }
+  });
 }
 
 // ─── Discovery ────────────────────────────────────────────────────────────────
