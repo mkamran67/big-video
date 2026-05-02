@@ -57,6 +57,22 @@ function renderList(selectors: string[], domain: string): void {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
+  // ── Tab switching ────────────────────────────────────────────────────────
+  document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.tab!;
+      document.querySelectorAll<HTMLElement>(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === target));
+      document.querySelectorAll<HTMLElement>(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${target}`));
+    });
+  });
+
+  // ── Version badge ────────────────────────────────────────────────────────
+  const versionEl = document.getElementById("about-version");
+  if (versionEl) {
+    const { version } = chrome.runtime.getManifest();
+    versionEl.textContent = `v${version}`;
+  }
+
   // Position picker
   chrome.storage.sync.get({ [STORAGE_KEY]: DEFAULT_POSITION }, (result) => {
     setActive(result[STORAGE_KEY] as ButtonPosition);

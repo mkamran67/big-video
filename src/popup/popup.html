@@ -13,7 +13,18 @@
         overflow: hidden;
       }
 
-      /* Header */
+      /* ── Settings panel scroll ───────────────────────────────── */
+      #panel-settings {
+        max-height: 520px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(100,100,200,0.3) transparent;
+      }
+      #panel-settings::-webkit-scrollbar { width: 4px; }
+      #panel-settings::-webkit-scrollbar-track { background: transparent; }
+      #panel-settings::-webkit-scrollbar-thumb { background: rgba(100,100,200,0.3); border-radius: 2px; }
+
+      /* ── Header ─────────────────────────────────────────────── */
       .header {
         display: flex; align-items: center; gap: 11px;
         padding: 16px 16px 14px;
@@ -28,7 +39,31 @@
       .header-title { font-size: 14px; font-weight: 700; }
       .header-sub   { font-size: 11px; color: rgba(180,180,220,0.45); margin-top: 2px; }
 
-      /* Sections */
+      /* ── Tab bar ─────────────────────────────────────────────── */
+      .tab-bar {
+        display: flex;
+        border-bottom: 1px solid rgba(110,110,220,0.18);
+        background: rgba(255,255,255,0.015);
+      }
+      .tab-btn {
+        flex: 1; padding: 9px 0;
+        background: none; border: none; border-bottom: 2px solid transparent;
+        color: rgba(180,180,220,0.45); font-size: 12px; font-weight: 600;
+        font-family: inherit; cursor: pointer; letter-spacing: 0.02em;
+        transition: color 150ms, border-color 150ms, background 150ms;
+      }
+      .tab-btn:hover { color: rgba(200,200,255,0.75); background: rgba(110,110,220,0.06); }
+      .tab-btn.active {
+        color: #c0c0ff;
+        border-bottom-color: rgba(120,120,255,0.85);
+        background: rgba(110,110,220,0.08);
+      }
+
+      /* ── Tab panels ──────────────────────────────────────────── */
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
+
+      /* ── Sections ────────────────────────────────────────────── */
       .section { padding: 14px 16px; }
       .section + .section { border-top: 1px solid rgba(110,110,220,0.12); }
       .section-label {
@@ -41,7 +76,7 @@
         color: rgba(140,140,200,0.55);
       }
 
-      /* Position picker frame */
+      /* ── Position picker frame ───────────────────────────────── */
       .frame-wrap {
         background: rgba(255,255,255,0.03);
         border: 1px solid rgba(110,110,220,0.2);
@@ -76,7 +111,7 @@
       .pos-label { font-size:12px; color:rgba(180,180,220,0.5); text-align:center; }
       .pos-label strong { color:#a0a0ff; font-weight:600; }
 
-      /* Picker button */
+      /* ── Picker button ───────────────────────────────────────── */
       .picker-btn {
         display: flex; align-items: center; gap: 8px; width: 100%;
         padding: 8px 12px;
@@ -89,8 +124,8 @@
       .picker-btn:hover { background:rgba(100,100,220,0.2); border-color:rgba(110,110,255,0.5); }
       .picker-btn .icon { font-size: 14px; }
 
-      /* Selectors list */
-      .selectors-list { display: flex; flex-direction: column; gap: 5px; max-height: 140px; overflow-y: auto; }
+      /* ── Selectors list ──────────────────────────────────────── */
+      .selectors-list { display: flex; flex-direction: column; gap: 5px; max-height: 120px; overflow-y: auto; }
       .selectors-list::-webkit-scrollbar { width: 4px; }
       .selectors-list::-webkit-scrollbar-track { background: transparent; }
       .selectors-list::-webkit-scrollbar-thumb { background: rgba(100,100,200,0.3); border-radius: 2px; }
@@ -114,7 +149,7 @@
       .del-btn:hover { background: rgba(200,60,60,0.35); color: #ff8888; }
       .empty-msg { font-size: 11px; color: rgba(180,180,220,0.3); text-align: center; padding: 6px 0; }
 
-      /* Toggle row */
+      /* ── Toggle row ──────────────────────────────────────────── */
       .toggle-row {
         display: flex; align-items: center; justify-content: space-between;
         gap: 10px;
@@ -148,7 +183,80 @@
         transform: translateX(16px); background: #c8c8ff;
       }
 
-      /* Footer */
+      /* ── About tab ───────────────────────────────────────────── */
+      .about-hero {
+        display: flex; flex-direction: column; align-items: center;
+        padding: 22px 16px 16px; gap: 8px;
+        border-bottom: 1px solid rgba(110,110,220,0.12);
+      }
+      .about-icon {
+        width: 52px; height: 52px;
+        background: linear-gradient(135deg,#2a2a6e,#1a1a40);
+        border: 1px solid rgba(110,110,220,0.4); border-radius: 14px;
+        display: flex; align-items: center; justify-content: center; font-size: 26px;
+        box-shadow: 0 4px 24px rgba(80,80,200,0.25);
+      }
+      .about-name { font-size: 15px; font-weight: 700; color: #dde0ff; }
+      .about-version {
+        font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+        color: rgba(140,140,200,0.5); text-transform: uppercase;
+      }
+      .about-desc {
+        font-size: 11.5px; color: rgba(200,200,240,0.6); line-height: 1.55;
+        text-align: center; padding: 0 4px;
+      }
+
+      .about-features {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(110,110,220,0.12);
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .feature-item {
+        display: flex; align-items: flex-start; gap: 9px;
+      }
+      .feature-icon {
+        font-size: 14px; flex-shrink: 0; margin-top: 1px;
+        filter: drop-shadow(0 0 4px rgba(120,120,255,0.4));
+      }
+      .feature-text { font-size: 11.5px; color: rgba(200,200,240,0.65); line-height: 1.45; }
+
+      .about-contact {
+        padding: 14px 16px 16px;
+      }
+      .contact-label {
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.1em; color: rgba(180,180,220,0.4); margin-bottom: 10px;
+      }
+      .contact-card {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 12px;
+        background: rgba(100,100,200,0.08);
+        border: 1px solid rgba(110,110,220,0.22);
+        border-radius: 10px;
+      }
+      .contact-avatar {
+        width: 32px; height: 32px; flex-shrink: 0;
+        background: linear-gradient(135deg,#3a3a8e,#1a1a50);
+        border: 1px solid rgba(120,120,255,0.35); border-radius: 50%;
+        display: flex; align-items: center; justify-content: center; font-size: 15px;
+      }
+      .contact-email {
+        flex: 1; min-width: 0;
+        font-size: 11px; color: rgba(180,180,240,0.7);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .contact-link {
+        flex-shrink: 0;
+        padding: 5px 10px;
+        background: rgba(90,90,220,0.25); border: 1px solid rgba(120,120,255,0.4);
+        border-radius: 6px; color: #b0b0ff; font-size: 10.5px; font-weight: 600;
+        font-family: inherit; cursor: pointer; text-decoration: none;
+        transition: background 150ms, border-color 150ms;
+        white-space: nowrap;
+      }
+      .contact-link:hover { background: rgba(90,90,220,0.4); border-color: rgba(140,140,255,0.7); color: #d0d0ff; }
+
+      /* ── Footer ──────────────────────────────────────────────── */
       .footer {
         padding: 9px 16px 11px;
         border-top: 1px solid rgba(110,110,220,0.12);
@@ -157,6 +265,7 @@
     </style>
   </head>
   <body>
+    <!-- Header -->
     <div class="header">
       <div class="header-icon">🎬</div>
       <div>
@@ -165,61 +274,119 @@
       </div>
     </div>
 
-    <!-- Position section -->
-    <div class="section">
-      <div class="section-label">Expand Button Position</div>
-      <div class="frame-wrap">
-        <div class="frame-center">▶</div>
-        <button class="pos-btn" data-pos="top-left"     title="Top Left">↖</button>
-        <button class="pos-btn" data-pos="top-right"    title="Top Right">↗</button>
-        <button class="pos-btn" data-pos="bottom-left"  title="Bottom Left">↙</button>
-        <button class="pos-btn" data-pos="bottom-right" title="Bottom Right">↘</button>
-      </div>
-      <p class="pos-label">Position: <strong id="pos-label">Top Right</strong></p>
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-settings" data-tab="settings">⚙ Settings</button>
+      <button class="tab-btn"        id="tab-about"    data-tab="about">ℹ About</button>
     </div>
 
-    <!-- Element hider section -->
-    <div class="section">
-      <div class="section-label">
-        Hide Elements on Expand
-        <span id="domain-badge"></span>
-      </div>
-      <button class="picker-btn" id="picker-btn">
-        <span class="icon">🎯</span> Pick elements to hide
-      </button>
-      <div class="selectors-list" id="selectors-list">
-        <p class="empty-msg">No elements hidden for this site</p>
-      </div>
-    </div>
+    <!-- ═══════════════ SETTINGS TAB ═══════════════ -->
+    <div class="tab-panel active" id="panel-settings">
 
-    <!-- Auto-shrink section -->
-    <div class="section">
-      <div class="toggle-row">
-        <div class="toggle-label">
-          Auto-shrink on video end
-          <small>Restore original size when the video finishes</small>
+      <!-- Position section -->
+      <div class="section">
+        <div class="section-label">Expand Button Position</div>
+        <div class="frame-wrap">
+          <div class="frame-center">▶</div>
+          <button class="pos-btn" data-pos="top-left"     title="Top Left">↖</button>
+          <button class="pos-btn" data-pos="top-right"    title="Top Right">↗</button>
+          <button class="pos-btn" data-pos="bottom-left"  title="Bottom Left">↙</button>
+          <button class="pos-btn" data-pos="bottom-right" title="Bottom Right">↘</button>
         </div>
-        <label class="switch" title="Toggle auto-shrink">
-          <input type="checkbox" id="auto-shrink-toggle" />
-          <span class="slider"></span>
-        </label>
+        <p class="pos-label">Position: <strong id="pos-label">Top Right</strong></p>
       </div>
-    </div>
 
-    <!-- Auto-expand section -->
-    <div class="section">
-      <div class="toggle-row">
-        <div class="toggle-label">
-          Auto-expand on this domain
-          <small id="auto-expand-domain-label">Expand the first video automatically</small>
+      <!-- Element hider section -->
+      <div class="section">
+        <div class="section-label">
+          Hide Elements on Expand
+          <span id="domain-badge"></span>
         </div>
-        <label class="switch" title="Toggle auto-expand for this domain">
-          <input type="checkbox" id="auto-expand-toggle" />
-          <span class="slider"></span>
-        </label>
+        <button class="picker-btn" id="picker-btn">
+          <span class="icon">🎯</span> Pick elements to hide
+        </button>
+        <div class="selectors-list" id="selectors-list">
+          <p class="empty-msg">No elements hidden for this site</p>
+        </div>
       </div>
+
+      <!-- Auto-shrink section -->
+      <div class="section">
+        <div class="toggle-row">
+          <div class="toggle-label">
+            Auto-shrink on video end
+            <small>Restore original size when the video finishes</small>
+          </div>
+          <label class="switch" title="Toggle auto-shrink">
+            <input type="checkbox" id="auto-shrink-toggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Auto-expand section -->
+      <div class="section">
+        <div class="toggle-row">
+          <div class="toggle-label">
+            Auto-expand on this domain
+            <small id="auto-expand-domain-label">Expand the first video automatically</small>
+          </div>
+          <label class="switch" title="Toggle auto-expand for this domain">
+            <input type="checkbox" id="auto-expand-toggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="footer">Changes apply instantly · hidden elements saved per site</div>
     </div>
 
-    <div class="footer">Changes apply instantly · hidden elements saved per site</div>
+    <!-- ═══════════════ ABOUT TAB ═══════════════ -->
+    <div class="tab-panel" id="panel-about">
+
+      <!-- Hero -->
+      <div class="about-hero">
+        <div class="about-icon">🎬</div>
+        <div class="about-name">Big Video</div>
+        <div class="about-version" id="about-version">v0.0.0</div>
+        <p class="about-desc">
+          A lightweight browser extension that lets you expand any embedded video iframe to full-screen with a single click — no sign-in, no tracking, no fuss.
+        </p>
+      </div>
+
+      <!-- Features -->
+      <div class="about-features">
+        <div class="feature-item">
+          <span class="feature-icon">🔍</span>
+          <span class="feature-text">Auto-detects YouTube, Vimeo, Twitch, Dailymotion &amp; more</span>
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">📌</span>
+          <span class="feature-text">Configurable button position — per browser profile</span>
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">🙈</span>
+          <span class="feature-text">Hide distracting page elements while watching</span>
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">⚡</span>
+          <span class="feature-text">Auto-expand &amp; auto-shrink per domain</span>
+        </div>
+      </div>
+
+      <!-- Contact -->
+      <div class="about-contact">
+        <div class="contact-label">Feature Requests &amp; Feedback</div>
+        <div class="contact-card">
+          <div class="contact-avatar">✉️</div>
+          <div class="contact-email">me@mkamran.us</div>
+          <a class="contact-link" href="mailto:me@mkamran.us" target="_blank" rel="noopener">
+            Email ↗
+          </a>
+        </div>
+      </div>
+
+    </div>
+
   </body>
 </html>

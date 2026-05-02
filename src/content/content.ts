@@ -246,29 +246,89 @@ function startPicker(): void {
 
   pickerBanner = document.createElement("div");
   pickerBanner.setAttribute("data-bv-banner", "true");
+
+  // Start in the top-right corner as a compact floating pill (not full-width)
+  // so it's immediately out of the way. The user can drag it anywhere.
+  const bannerRight  = 16;
+  const bannerTop    = 16;
   Object.assign(pickerBanner.style, {
-    position: "fixed", top: "0", left: "0", right: "0",
-    zIndex: String(Z_TOP), background: "linear-gradient(135deg,#1a1a3e,#0d0d20)",
-    color: "#dde0ff", padding: "10px 16px", display: "flex",
-    alignItems: "center", gap: "10px",
+    position: "fixed",
+    top: `${bannerTop}px`,
+    right: `${bannerRight}px`,
+    left: "auto",
+    width: "max-content",
+    maxWidth: "calc(100vw - 32px)",
+    zIndex: String(Z_TOP),
+    background: "linear-gradient(135deg,#1a1a3e,#0d0d20)",
+    color: "#dde0ff", padding: "8px 12px", display: "flex",
+    alignItems: "center", gap: "8px",
     fontFamily: "system-ui,-apple-system,sans-serif", fontSize: "13px",
-    borderBottom: "1px solid rgba(100,100,255,0.3)",
-    boxShadow: "0 2px 20px rgba(0,0,0,0.5)",
+    border: "1px solid rgba(100,100,255,0.35)", borderRadius: "10px",
+    boxShadow: "0 4px 24px rgba(0,0,0,0.6)",
+    userSelect: "none",
+    cursor: "grab",
   });
 
+  // ── Drag handle (⠿ icon) ──────────────────────────────────────────────────
+  const handle = document.createElement("span");
+  handle.textContent = "⠿";
+  Object.assign(handle.style, {
+    fontSize: "18px", opacity: "0.55", cursor: "grab", flexShrink: "0",
+    lineHeight: "1", touchAction: "none",
+  });
+
+  // Drag state
+  let dragging = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+
+  const onPointerMove = (e: PointerEvent) => {
+    if (!dragging || !pickerBanner) return;
+    const x = e.clientX - dragOffsetX;
+    const y = e.clientY - dragOffsetY;
+    pickerBanner.style.left   = `${Math.max(0, x)}px`;
+    pickerBanner.style.top    = `${Math.max(0, y)}px`;
+    pickerBanner.style.right  = "auto";
+    pickerBanner.style.bottom = "auto";
+  };
+  const onPointerUp = (e: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    handle.releasePointerCapture(e.pointerId);
+    if (pickerBanner) pickerBanner.style.cursor = "grab";
+    handle.style.cursor = "grab";
+  };
+
+  handle.addEventListener("pointerdown", (e: PointerEvent) => {
+    if (!pickerBanner) return;
+    dragging = true;
+    const rect = pickerBanner.getBoundingClientRect();
+    dragOffsetX = e.clientX - rect.left;
+    dragOffsetY = e.clientY - rect.top;
+    handle.setPointerCapture(e.pointerId);
+    pickerBanner.style.cursor = "grabbing";
+    handle.style.cursor = "grabbing";
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", onPointerMove);
+  handle.addEventListener("pointerup", onPointerUp);
+
   const label = document.createElement("span");
-  label.innerHTML = "🎯 <strong>Picker Mode</strong> — click elements to <strong>hide</strong> when expanded · click again to deselect · <kbd>Esc</kbd> to finish";
+  label.innerHTML = "🎯 <strong>Picker</strong> — click to <strong>hide</strong> · click again to deselect · <kbd>Esc</kbd> done";
   label.style.flex = "1";
+  label.style.whiteSpace = "nowrap";
 
   const done = document.createElement("button");
   done.textContent = "✓ Done";
   Object.assign(done.style, {
-    padding: "5px 14px", background: "rgba(80,80,220,0.35)",
+    padding: "4px 12px", background: "rgba(80,80,220,0.35)",
     border: "1px solid rgba(120,120,255,0.5)", borderRadius: "6px",
     color: "#fff", cursor: "pointer", fontSize: "12px", fontWeight: "700",
+    flexShrink: "0",
   });
   done.addEventListener("click", stopPicker);
 
+  pickerBanner.appendChild(handle);
   pickerBanner.appendChild(label);
   pickerBanner.appendChild(done);
   document.body.appendChild(pickerBanner);
@@ -315,14 +375,56 @@ const VIDEO_SRC_PATTERNS = [
   /instagram\.com\/p\//, /tiktok\.com\/embed/, /rumble\.com\/embed/,
   /odysee\.com\/\$/, /bitchute\.com\/embed/, /streamable\.com\/e\//,
   /wistia\.com\/embed/, /loom\.com\/embed/, /drive\.google\.com\/file/,
+  // Third-party embed hosts used by anime / media streaming sites
+  /kwik\.cx\/e\//, /kwik\.si\/e\//, /kwik\.to\/e\//,
+  /mp4upload\.com\/embed/, /dood\.(?:watch|la|to|re|pm|stream)\/e\//,
+  /filemoon\.sx\/e\//, /streamlare\.com\/e\//, /mixdrop\.co\/e\//,
+  /vidplay\.online\/e\//, /vidstreaming\.io\/streaming\.php/, /gogo-stream\.com\/embed/,
+  /rapid-cloud\.co\/video-block\//, /megaf\.cc\/v\//, /streamtape\.com\/e\//,
+  /voe\.sx\/e\//, /upstream\.to\/e\//, /embedsito\.com\//,
 ];
+
+/**
+ * CSS class name patterns on ancestor elements that strongly suggest the
+ * iframe is a video player (Bootstrap embed-responsive, common player wrappers,
+ * aspect-ratio containers used by anime / media streaming sites).
+ */
+const VIDEO_WRAPPER_CLASS_PATTERNS = [
+  /\bembed[-_]responsive\b/i,
+  /\bvideo[-_]?(container|wrapper|player|embed|frame|box)\b/i,
+  /\bplayer[-_]?(container|wrapper|embed|frame|box)?\b/i,
+  /\btheatre\b/i,
+  /\bcinema\b/i,
+  /\bwatch[-_]?(container|wrapper|player)?\b/i,
+  /\bstream[-_]?(container|wrapper|player)?\b/i,
+  /\bjw[-_]?player\b/i,
+  /\bplyr\b/i,
+  /\bvjs[-_]?tech\b/i,
+];
+
+function isInsideVideoWrapper(iframe: HTMLIFrameElement): boolean {
+  let el: HTMLElement | null = iframe.parentElement;
+  // Walk up at most 6 levels — enough to catch deeply nested Bootstrap wrappers
+  // without accidentally matching unrelated containers higher on the page.
+  for (let depth = 0; depth < 6 && el && el !== document.body; depth++) {
+    const classes = el.className;
+    if (typeof classes === "string" && VIDEO_WRAPPER_CLASS_PATTERNS.some((re) => re.test(classes))) {
+      return true;
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
 
 function looksLikeVideoFrame(iframe: HTMLIFrameElement): boolean {
   const src = iframe.src || iframe.getAttribute("src") || "";
   if (!src) return false;
   const allow = iframe.getAttribute("allow") || "";
   if (/autoplay|fullscreen|picture-in-picture/i.test(allow)) return true;
-  return VIDEO_SRC_PATTERNS.some((re) => re.test(src));
+  if (VIDEO_SRC_PATTERNS.some((re) => re.test(src))) return true;
+  // Structural fallback: iframe sits inside a recognised video-wrapper element.
+  if (isInsideVideoWrapper(iframe)) return true;
+  return false;
 }
 
 // ─── Core: attach overlay buttons to a video iframe ───────────────────────────
