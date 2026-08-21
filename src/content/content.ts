@@ -1,50 +1,16 @@
 import { createExpandButton } from "../utils/customBtn";
+import { calculateContainedRect, resolveAspectRatio, scoreIframeCandidate } from "./media";
 
 type ButtonPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+type MediaElement = HTMLVideoElement | HTMLIFrameElement;
+type PickerMode = "hide" | "player";
 
-const Z_TOP = 2147483647;
-const BTN_SIZE = 36;
-const BTN_MARGIN = 10;
-const STORAGE_KEY = "buttonPosition";
-const STORAGE_KEY_SHRINK = "autoShrinkOnEnd";
-const HIDDEN_PREFIX = "bv_hidden_";
-const AUTO_EXPAND_PREFIX = "autoExpand_";
-const DEFAULT_POSITION: ButtonPosition = "top-right";
-const domain = window.location.hostname;
-
-let currentPosition: ButtonPosition = DEFAULT_POSITION;
-let autoShrinkOnEnd: boolean = false;
-let autoExpandOnDomain: boolean = false;
-let autoExpandFired: boolean = false; // ensure only first iframe auto-expands per page load
-const repositionFns: Array<() => void> = [];
-
-chrome.storage.sync.get({ [STORAGE_KEY]: DEFAULT_POSITION, [HIDDEN_PREFIX + domain]: [], [STORAGE_KEY_SHRINK]: false, [AUTO_EXPAND_PREFIX + domain]: false }, (result) => {
-  currentPosition = result[STORAGE_KEY] as ButtonPosition;
-  cachedHiddenSelectors = result[HIDDEN_PREFIX + domain] as string[];
-  autoShrinkOnEnd = result[STORAGE_KEY_SHRINK] as boolean;
-  autoExpandOnDomain = result[AUTO_EXPAND_PREFIX + domain] as boolean;
-  repositionFns.forEach((fn) => fn());
-});
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "sync") return;
-  if (changes[STORAGE_KEY]) {
-    currentPosition = changes[STORAGE_KEY].newValue as ButtonPosition;
-    repositionFns.forEach((fn) => fn());
-  }
-  if (changes[HIDDEN_PREFIX + domain]) {
-    cachedHiddenSelectors = changes[HIDDEN_PREFIX + domain].newValue as string[];
-  }
-  if (changes[STORAGE_KEY_SHRINK]) {
-    autoShrinkOnEnd = changes[STORAGE_KEY_SHRINK].newValue as boolean;
-  }
-  if (changes[AUTO_EXPAND_PREFIX + domain]) {
-    autoExpandOnDomain = changes[AUTO_EXPAND_PREFIX + domain].newValue as boolean;
-    // Reset fired flag whenever the setting is toggled so a new decision takes effect
-    if (!autoExpandOnDomain) autoExpandFired = false;
-  }
-});
-
-// ─── Style override helpers ───────────────────────────────────────────────────
+interface FrameMessage {
+  source: "big-video";
+  type: "media-report" | "media-clear" | "expand" | "shrink" | "ended" | "start-player-picker" | "stop-picker" | "player-picked";
+  ratio?: number;
+  confidence?: number;
+}
 
 interface StyleOverride {
   element: HTMLElement;
@@ -53,615 +19,547 @@ interface StyleOverride {
   savedPriority: string;
 }
 
-function makeOverride(el: HTMLElement, prop: string, value: string, bag: StyleOverride[]): void {
-  bag.push({ element: el, property: prop, savedValue: el.style.getPropertyValue(prop), savedPriority: el.style.getPropertyPriority(prop) });
-  el.style.setProperty(prop, value, "important");
+interface Target {
+  element: MediaElement;
+  ratio: number;
+  confidence: number;
+  nested: boolean;
+  expandButton?: HTMLButtonElement;
+  shrinkButton?: HTMLButtonElement;
+  overrides: StyleOverride[];
+  cleanup: Array<() => void>;
 }
 
-function restoreBag(bag: StyleOverride[]): void {
-  for (const o of bag) {
-    o.savedValue !== ""
-      ? o.element.style.setProperty(o.property, o.savedValue, o.savedPriority || "")
-      : o.element.style.removeProperty(o.property);
+const Z_TOP = 2147483647;
+const BTN_SIZE = 38;
+const BTN_MARGIN = 12;
+const STORAGE_POSITION = "buttonPosition";
+const STORAGE_SHRINK = "autoShrinkOnEnd";
+const HIDDEN_PREFIX = "bv_hidden_";
+const AUTO_EXPAND_PREFIX = "autoExpand_";
+const PLAYER_PREFIX = "bv_player_";
+const DEFAULT_POSITION: ButtonPosition = "top-right";
+const domain = window.location.hostname;
+const isTop = window === window.top;
+
+let currentPosition: ButtonPosition = DEFAULT_POSITION;
+let autoShrinkOnEnd = false;
+let autoExpandOnDomain = false;
+let autoExpandFired = false;
+let cachedHiddenSelectors: string[] = [];
+let rememberedPlayerSelector = "";
+let activeTarget: Target | null = null;
+let hiddenStyleEl: HTMLStyleElement | null = null;
+let backdrop: HTMLDivElement | null = null;
+let pickerMode: PickerMode | null = null;
+let pickerBanner: HTMLDivElement | null = null;
+let pickerStyle: HTMLStyleElement | null = null;
+let hoveredPickerElement: HTMLElement | null = null;
+const targets = new Map<MediaElement, Target>();
+const childTargets = new Map<HTMLIFrameElement, Target>();
+const observedRoots = new WeakSet<Document | ShadowRoot>();
+let positionFrame = 0;
+
+function postToParent(message: FrameMessage): void {
+  if (!isTop) window.parent.postMessage(message, "*");
+}
+
+function postToChild(iframe: HTMLIFrameElement, message: FrameMessage): void {
+  iframe.contentWindow?.postMessage(message, "*");
+}
+
+function directChildFor(source: MessageEventSource | null): HTMLIFrameElement | null {
+  if (!source) return null;
+  for (const iframe of deepElements<HTMLIFrameElement>(document, "iframe")) {
+    if (iframe.contentWindow === source) return iframe;
+  }
+  return null;
+}
+
+function deepElements<T extends Element>(root: Document | ShadowRoot, selector: string): T[] {
+  const matches = Array.from(root.querySelectorAll<T>(selector));
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+    if (element.shadowRoot) matches.push(...deepElements<T>(element.shadowRoot, selector));
+  }
+  return matches;
+}
+
+function isVisibleMedia(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width < 120 || rect.height < 68) return false;
+  const style = getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0;
+}
+
+function iframeClassContext(iframe: HTMLIFrameElement): string {
+  const values: string[] = [];
+  let current: HTMLElement | null = iframe;
+  for (let depth = 0; depth < 5 && current; depth += 1) {
+    values.push(current.id, typeof current.className === "string" ? current.className : "");
+    current = current.parentElement;
+  }
+  return values.join(" ");
+}
+
+function ratioForElement(element: MediaElement, reportedRatio?: number): number {
+  const rect = element.getBoundingClientRect();
+  return resolveAspectRatio({
+    intrinsicWidth: element instanceof HTMLVideoElement ? element.videoWidth : undefined,
+    intrinsicHeight: element instanceof HTMLVideoElement ? element.videoHeight : undefined,
+    reportedRatio,
+    renderedWidth: rect.width,
+    renderedHeight: rect.height,
+    attributeWidth: Number(element.getAttribute("width")),
+    attributeHeight: Number(element.getAttribute("height")),
+  });
+}
+
+function candidateConfidence(element: MediaElement): number {
+  if (element instanceof HTMLVideoElement) return isVisibleMedia(element) ? 100 : -100;
+  const rect = element.getBoundingClientRect();
+  return scoreIframeCandidate({
+    src: element.src || element.getAttribute("src") || "",
+    allow: element.allow,
+    title: element.title,
+    name: element.name,
+    id: element.id,
+    className: element.className,
+    ancestorClassName: iframeClassContext(element),
+    width: rect.width,
+    height: rect.height,
+  });
+}
+
+function primaryTarget(): Target | null {
+  return [...targets.values()]
+    .filter((target) => target.element.isConnected && isVisibleMedia(target.element))
+    .sort((a, b) => {
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      const aRect = a.element.getBoundingClientRect();
+      const bRect = b.element.getBoundingClientRect();
+      return bRect.width * bRect.height - aRect.width * aRect.height;
+    })[0] ?? null;
+}
+
+function setOverride(element: HTMLElement, property: string, value: string, bag: StyleOverride[]): void {
+  if (bag.some((override) => override.element === element && override.property === property)) {
+    element.style.setProperty(property, value, "important");
+    return;
+  }
+  bag.push({ element, property, savedValue: element.style.getPropertyValue(property), savedPriority: element.style.getPropertyPriority(property) });
+  element.style.setProperty(property, value, "important");
+}
+
+function restoreOverrides(bag: StyleOverride[]): void {
+  for (const override of bag.reverse()) {
+    if (override.savedValue) override.element.style.setProperty(override.property, override.savedValue, override.savedPriority);
+    else override.element.style.removeProperty(override.property);
   }
   bag.length = 0;
 }
 
-// ─── Hidden selector cache (populated at init, kept in sync with storage) ───
-
-let cachedHiddenSelectors: string[] = [];
-
-// ─── Stacking context suppression ────────────────────────────────────────────
-
-const stackingOverrides: StyleOverride[] = [];
-
-function suppressPageStacking(iframe: HTMLIFrameElement): void {
-  let ancestor: HTMLElement | null = iframe.parentElement;
+function suppressStackingContexts(element: HTMLElement, bag: StyleOverride[]): void {
+  let ancestor = element.parentElement;
   while (ancestor && ancestor !== document.documentElement) {
-    const cs = window.getComputedStyle(ancestor);
-    if (cs.transform !== "none")    makeOverride(ancestor, "transform", "none", stackingOverrides);
-    if (cs.filter !== "none")       makeOverride(ancestor, "filter", "none", stackingOverrides);
-    if (cs.perspective !== "none")  makeOverride(ancestor, "perspective", "none", stackingOverrides);
-    if (cs.isolation === "isolate") makeOverride(ancestor, "isolation", "auto", stackingOverrides);
-    if (cs.willChange !== "auto")   makeOverride(ancestor, "will-change", "auto", stackingOverrides);
-    const bf = cs.getPropertyValue("backdrop-filter");
-    if (bf && bf !== "none")        makeOverride(ancestor, "backdrop-filter", "none", stackingOverrides);
+    const style = getComputedStyle(ancestor);
+    if (style.transform !== "none") setOverride(ancestor, "transform", "none", bag);
+    if (style.filter !== "none") setOverride(ancestor, "filter", "none", bag);
+    if (style.perspective !== "none") setOverride(ancestor, "perspective", "none", bag);
+    if (style.isolation === "isolate") setOverride(ancestor, "isolation", "auto", bag);
+    if (style.contain.includes("paint")) setOverride(ancestor, "contain", "none", bag);
+    if (style.willChange !== "auto") setOverride(ancestor, "will-change", "auto", bag);
     ancestor = ancestor.parentElement;
   }
-  makeOverride(document.body, "position", "relative", stackingOverrides);
-  makeOverride(document.body, "z-index", "1", stackingOverrides);
 }
 
-// ─── Hidden-element selector management ──────────────────────────────────────
-
-let hiddenStyleEl: HTMLStyleElement | null = null;
-
-/** Inject a <style> tag that hides all saved selectors with !important rules.
- *  A style tag wins against every cascade layer, including !important in stylesheets. */
-function buildHiddenCSS(selectors: string[]): string {
-  return selectors
-    .map((sel) => `${sel} { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`)
-    .join("\n");
+function hiddenCss(): string {
+  return cachedHiddenSelectors.map((selector) => `${selector}{display:none!important;visibility:hidden!important;pointer-events:none!important}`).join("\n");
 }
 
 function applyHiddenSelectors(): void {
-  if (cachedHiddenSelectors.length === 0) return;
-  // Remove any previously injected tag before creating a new one so repeated
-  // expand → shrink → expand cycles don't accumulate orphaned <style> tags.
+  if (!isTop || cachedHiddenSelectors.length === 0) return;
   hiddenStyleEl?.remove();
   hiddenStyleEl = document.createElement("style");
-  hiddenStyleEl.setAttribute("data-bv-hidden", "true");
-  hiddenStyleEl.textContent = buildHiddenCSS(cachedHiddenSelectors);
-  document.head.appendChild(hiddenStyleEl);
+  hiddenStyleEl.dataset.bigVideoHidden = "true";
+  hiddenStyleEl.textContent = hiddenCss();
+  document.documentElement.appendChild(hiddenStyleEl);
 }
 
-/** Patch the live <style> tag so elements hide/show immediately while expanded. */
-function refreshHiddenSelectors(selectors: string[]): void {
-  if (!hiddenStyleEl) return; // not currently expanded — nothing to do
-  hiddenStyleEl.textContent = buildHiddenCSS(selectors);
+function refreshHiddenSelectors(): void {
+  if (hiddenStyleEl) hiddenStyleEl.textContent = hiddenCss();
 }
 
-function removeHiddenSelectors(): void {
-  hiddenStyleEl?.remove();
-  hiddenStyleEl = null;
+function ensureBackdrop(): void {
+  if (!isTop || backdrop) return;
+  backdrop = document.createElement("div");
+  backdrop.dataset.bigVideoBackdrop = "true";
+  Object.assign(backdrop.style, { position: "fixed", inset: "0", background: "#000", zIndex: String(Z_TOP - 1) });
+  document.documentElement.appendChild(backdrop);
 }
 
-// ─── CSS selector generator ───────────────────────────────────────────────────
+function viewportSize(): { width: number; height: number; offsetLeft: number; offsetTop: number } {
+  const visual = window.visualViewport;
+  return { width: visual?.width ?? window.innerWidth, height: visual?.height ?? window.innerHeight, offsetLeft: visual?.offsetLeft ?? 0, offsetTop: visual?.offsetTop ?? 0 };
+}
 
-function generateSelector(target: HTMLElement): string {
-  if (target.id) {
-    const s = `#${CSS.escape(target.id)}`;
-    try { if (document.querySelectorAll(s).length === 1) return s; } catch { /**/ }
+function layoutExpandedTarget(target: Target): void {
+  if (activeTarget !== target) return;
+  const viewport = viewportSize();
+  const rect = calculateContainedRect(viewport.width, viewport.height, target.ratio);
+  setOverride(target.element, "top", `${viewport.offsetTop + rect.top}px`, target.overrides);
+  setOverride(target.element, "left", `${viewport.offsetLeft + rect.left}px`, target.overrides);
+  setOverride(target.element, "width", `${rect.width}px`, target.overrides);
+  setOverride(target.element, "height", `${rect.height}px`, target.overrides);
+}
+
+function expandTarget(target: Target, fromParent = false): void {
+  if (activeTarget && activeTarget !== target) shrinkTarget(activeTarget, fromParent);
+  if (activeTarget === target) return;
+  activeTarget = target;
+  target.ratio = ratioForElement(target.element, target.ratio);
+  suppressStackingContexts(target.element, target.overrides);
+  setOverride(target.element, "position", "fixed", target.overrides);
+  setOverride(target.element, "right", "auto", target.overrides);
+  setOverride(target.element, "bottom", "auto", target.overrides);
+  setOverride(target.element, "max-width", "none", target.overrides);
+  setOverride(target.element, "max-height", "none", target.overrides);
+  setOverride(target.element, "margin", "0", target.overrides);
+  setOverride(target.element, "border", "0", target.overrides);
+  setOverride(target.element, "z-index", String(Z_TOP), target.overrides);
+  if (target.element instanceof HTMLVideoElement) {
+    setOverride(target.element, "object-fit", "contain", target.overrides);
+    setOverride(target.element, "background", "#000", target.overrides);
   }
-  const path: string[] = [];
-  let el: HTMLElement | null = target;
-  while (el && el.tagName !== "HTML" && el.tagName !== "BODY") {
-    let part = el.tagName.toLowerCase();
-    if (el.id) { path.unshift(`#${CSS.escape(el.id)}`); break; }
-    const classes = Array.from(el.classList)
-      .filter((c) => c.length > 1 && !/^\d/.test(c))
-      .slice(0, 2);
-    if (classes.length) part += "." + classes.map((c) => CSS.escape(c)).join(".");
-    const parent = el.parentElement;
-    if (parent) {
-      const siblings = Array.from(parent.children).filter((s) => s.tagName === el!.tagName);
-      if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(el) + 1})`;
+  setOverride(document.documentElement, "overflow", "hidden", target.overrides);
+  setOverride(document.body, "overflow", "hidden", target.overrides);
+  layoutExpandedTarget(target);
+
+  if (isTop) {
+    ensureBackdrop();
+    applyHiddenSelectors();
+    target.expandButton!.hidden = true;
+    target.shrinkButton!.hidden = false;
+    target.shrinkButton!.focus({ preventScroll: true });
+    schedulePositions();
+  }
+  if (target.element instanceof HTMLIFrameElement) postToChild(target.element, { source: "big-video", type: "expand", ratio: target.ratio });
+}
+
+function shrinkTarget(target: Target, fromParent = false): void {
+  if (target.element instanceof HTMLIFrameElement) postToChild(target.element, { source: "big-video", type: "shrink" });
+  restoreOverrides(target.overrides);
+  if (activeTarget === target) activeTarget = null;
+  if (isTop) {
+    backdrop?.remove();
+    backdrop = null;
+    hiddenStyleEl?.remove();
+    hiddenStyleEl = null;
+    target.shrinkButton!.hidden = true;
+    target.expandButton!.hidden = false;
+    if (!fromParent) target.expandButton!.focus({ preventScroll: true });
+    schedulePositions();
+  }
+}
+
+function makeShrinkButton(): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.bigVideoShrink = "true";
+  button.hidden = true;
+  button.setAttribute("aria-label", "Restore video to its original size");
+  button.title = "Restore video";
+  button.textContent = "×";
+  Object.assign(button.style, { position: "fixed", zIndex: String(Z_TOP), width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px`, borderRadius: "999px", border: "1px solid #7478c7", background: "#17182f", color: "#fff", font: "600 22px/1 system-ui,sans-serif", cursor: "pointer", boxShadow: "0 4px 18px rgba(0,0,0,.55)" });
+  return button;
+}
+
+function registerTarget(element: MediaElement, confidence: number, ratio?: number, nested = false): Target {
+  const existing = targets.get(element);
+  if (existing) {
+    existing.confidence = Math.max(existing.confidence, confidence);
+    existing.ratio = ratioForElement(element, ratio ?? existing.ratio);
+    schedulePositions();
+    return existing;
+  }
+  const target: Target = { element, ratio: ratioForElement(element, ratio), confidence, nested, overrides: [], cleanup: [] };
+  targets.set(element, target);
+  if (isTop) {
+    target.expandButton = createExpandButton();
+    target.shrinkButton = makeShrinkButton();
+    document.documentElement.append(target.expandButton, target.shrinkButton);
+    target.expandButton.addEventListener("click", () => expandTarget(target));
+    target.shrinkButton.addEventListener("click", () => shrinkTarget(target));
+    target.cleanup.push(() => target.expandButton?.remove(), () => target.shrinkButton?.remove());
+  }
+  if (element instanceof HTMLVideoElement) {
+    const updateRatio = () => { target.ratio = ratioForElement(element); if (activeTarget === target) layoutExpandedTarget(target); reportPrimary(); };
+    const ended = () => {
+      if (activeTarget === target && autoShrinkOnEnd) {
+        if (isTop) shrinkTarget(target);
+        else postToParent({ source: "big-video", type: "ended" });
+      }
+    };
+    element.addEventListener("loadedmetadata", updateRatio);
+    element.addEventListener("resize", updateRatio);
+    element.addEventListener("ended", ended);
+    target.cleanup.push(() => element.removeEventListener("loadedmetadata", updateRatio), () => element.removeEventListener("resize", updateRatio), () => element.removeEventListener("ended", ended));
+  }
+  schedulePositions();
+  reportPrimary();
+  maybeAutoExpand();
+  return target;
+}
+
+function removeTarget(element: MediaElement): void {
+  const target = targets.get(element);
+  if (!target) return;
+  if (activeTarget === target) shrinkTarget(target);
+  target.cleanup.forEach((cleanup) => cleanup());
+  targets.delete(element);
+  if (element instanceof HTMLIFrameElement) childTargets.delete(element);
+  reportPrimary();
+}
+
+function reportPrimary(): void {
+  if (isTop) return;
+  const target = primaryTarget();
+  if (!target) postToParent({ source: "big-video", type: "media-clear" });
+  else postToParent({ source: "big-video", type: "media-report", ratio: target.ratio, confidence: target.confidence });
+}
+
+function matchesRememberedPlayer(element: HTMLElement): boolean {
+  if (!isTop || !rememberedPlayerSelector) return false;
+  try { return element.matches(rememberedPlayerSelector); } catch { return false; }
+}
+
+function scanRoot(root: Document | ShadowRoot | HTMLElement): void {
+  for (const video of deepElements<HTMLVideoElement>(root as Document | ShadowRoot, "video")) {
+    if (isVisibleMedia(video) || video.readyState > 0) registerTarget(video, 100);
+  }
+  for (const iframe of deepElements<HTMLIFrameElement>(root as Document | ShadowRoot, "iframe")) {
+    const confidence = candidateConfidence(iframe);
+    if (confidence >= 50 || matchesRememberedPlayer(iframe)) registerTarget(iframe, matchesRememberedPlayer(iframe) ? 110 : confidence);
+  }
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) if (element.shadowRoot) observeRoot(element.shadowRoot);
+}
+
+function observeRoot(root: Document | ShadowRoot): void {
+  if (observedRoots.has(root)) return;
+  observedRoots.add(root);
+  scanRoot(root);
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === "attributes") {
+        if (mutation.target instanceof HTMLIFrameElement) {
+          const confidence = candidateConfidence(mutation.target);
+          if (confidence >= 50 || matchesRememberedPlayer(mutation.target)) registerTarget(mutation.target, matchesRememberedPlayer(mutation.target) ? 110 : confidence);
+        }
+        continue;
+      }
+      for (const node of Array.from(mutation.addedNodes)) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node instanceof HTMLVideoElement && (isVisibleMedia(node) || node.readyState > 0)) registerTarget(node, 100);
+        if (node instanceof HTMLIFrameElement) {
+          const confidence = candidateConfidence(node);
+          if (confidence >= 50) registerTarget(node, confidence);
+        }
+        scanRoot(node);
+        if (node.shadowRoot) observeRoot(node.shadowRoot);
+      }
+      for (const node of Array.from(mutation.removedNodes)) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node instanceof HTMLVideoElement || node instanceof HTMLIFrameElement) removeTarget(node);
+        node.querySelectorAll<MediaElement>("video,iframe").forEach(removeTarget);
+      }
     }
-    path.unshift(part);
-    try { if (document.querySelectorAll(path.join(" > ")).length === 1) break; } catch { /**/ }
-    el = el.parentElement;
-  }
-  return path.join(" > ");
-}
-
-// ─── Picker mode ──────────────────────────────────────────────────────────────
-
-let pickerActive = false;
-let pickerBanner: HTMLElement | null = null;
-let pickerStyle: HTMLStyleElement | null = null;
-let hoveredEl: HTMLElement | null = null;
-let pickerSelectors: Set<string> = new Set();
-
-function onHover(e: MouseEvent): void {
-  const t = e.target as HTMLElement;
-  if (pickerBanner?.contains(t)) return;
-  hoveredEl?.removeAttribute("data-bv-hover");
-  hoveredEl = t;
-  t.setAttribute("data-bv-hover", "true");
-}
-function onOut(e: MouseEvent): void {
-  (e.target as HTMLElement).removeAttribute("data-bv-hover");
-}
-function onPickerClick(e: MouseEvent): void {
-  const t = e.target as HTMLElement;
-  if (pickerBanner?.contains(t)) return;
-  e.preventDefault(); e.stopPropagation();
-  const sel = generateSelector(t);
-  if (pickerSelectors.has(sel)) {
-    pickerSelectors.delete(sel);
-    document.querySelectorAll(`[data-bv-selected]`).forEach((el) => {
-      if (generateSelector(el as HTMLElement) === sel) el.removeAttribute("data-bv-selected");
-    });
-  } else {
-    pickerSelectors.add(sel);
-    document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true"));
-  }
-  // Immediately hide/show the element if the video is currently expanded.
-  refreshHiddenSelectors(Array.from(pickerSelectors));
-}
-function onPickerKey(e: KeyboardEvent): void { if (e.key === "Escape") stopPicker(); }
-
-function stopPicker(): void {
-  if (!pickerActive) return;
-  pickerActive = false;
-  // Update the cache immediately so the next expand uses the new selectors
-  // without waiting for storage.onChanged to fire.
-  cachedHiddenSelectors = Array.from(pickerSelectors);
-  chrome.storage.sync.set({ [HIDDEN_PREFIX + domain]: cachedHiddenSelectors });
-  // If the video is currently expanded, patch the live <style> tag immediately
-  // so elements disappear without requiring a shrink → re-expand cycle.
-  refreshHiddenSelectors(cachedHiddenSelectors);
-  document.querySelectorAll("[data-bv-hover],[data-bv-selected]").forEach((el) => {
-    el.removeAttribute("data-bv-hover"); el.removeAttribute("data-bv-selected");
+    schedulePositions();
   });
+  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "allow", "class", "style", "width", "height", "title"] });
+}
+
+function schedulePositions(): void {
+  if (!isTop || positionFrame) return;
+  positionFrame = requestAnimationFrame(() => { positionFrame = 0; updatePositions(); });
+}
+
+function updatePositions(): void {
+  const viewport = viewportSize();
+  for (const target of [...targets.values()]) {
+    if (!target.element.isConnected) { removeTarget(target.element); continue; }
+    if (!target.expandButton || !target.shrinkButton) continue;
+    const rect = target.element.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < viewport.height && rect.left < viewport.width;
+    target.expandButton.hidden = activeTarget === target || !visible;
+    if (activeTarget !== target) {
+      target.expandButton.style.top = `${currentPosition.startsWith("top") ? rect.top + BTN_MARGIN : rect.bottom - BTN_SIZE - BTN_MARGIN}px`;
+      target.expandButton.style.left = `${currentPosition.endsWith("left") ? rect.left + BTN_MARGIN : rect.right - BTN_SIZE - BTN_MARGIN}px`;
+    }
+    target.shrinkButton.style.top = `${currentPosition.startsWith("top") ? BTN_MARGIN : viewport.height - BTN_SIZE - BTN_MARGIN}px`;
+    target.shrinkButton.style.left = `${currentPosition.endsWith("left") ? BTN_MARGIN : viewport.width - BTN_SIZE - BTN_MARGIN}px`;
+  }
+  if (activeTarget) layoutExpandedTarget(activeTarget);
+}
+
+function selectorFor(element: HTMLElement): string {
+  if (element.id) return `#${CSS.escape(element.id)}`;
+  const parts: string[] = [];
+  let current: HTMLElement | null = element;
+  while (current && current !== document.body && parts.length < 6) {
+    let part = current.tagName.toLowerCase();
+    const classes = [...current.classList].filter((name) => name.length > 1 && !/\d{3,}/.test(name)).slice(0, 2);
+    if (classes.length) part += `.${classes.map(CSS.escape).join(".")}`;
+    const parentElement: HTMLElement | null = current.parentElement;
+    if (parentElement) {
+      const siblings = [...parentElement.children].filter((child) => child.tagName === current!.tagName);
+      if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+    }
+    parts.unshift(part);
+    const selector = parts.join(" > ");
+    try { if (document.querySelectorAll(selector).length === 1) return selector; } catch { /* keep building */ }
+    current = parentElement;
+  }
+  return parts.join(" > ");
+}
+
+function stopPicker(saveHidden = true): void {
+  if (!pickerMode) return;
+  const oldMode = pickerMode;
+  pickerMode = null;
+  hoveredPickerElement?.removeAttribute("data-big-video-picker-hover");
+  hoveredPickerElement = null;
   pickerStyle?.remove(); pickerStyle = null;
   pickerBanner?.remove(); pickerBanner = null;
-  hoveredEl = null;
-  document.removeEventListener("mouseover", onHover, true);
-  document.removeEventListener("mouseout", onOut, true);
+  document.removeEventListener("pointerover", onPickerHover, true);
   document.removeEventListener("click", onPickerClick, true);
   document.removeEventListener("keydown", onPickerKey, true);
+  for (const iframe of deepElements<HTMLIFrameElement>(document, "iframe")) postToChild(iframe, { source: "big-video", type: "stop-picker" });
+  if (oldMode === "hide" && saveHidden && isTop) chrome.storage.sync.set({ [HIDDEN_PREFIX + domain]: cachedHiddenSelectors });
 }
 
-function startPicker(): void {
-  if (pickerActive) return;
-  pickerActive = true;
+function onPickerHover(event: PointerEvent): void {
+  if (!(event.target instanceof HTMLElement) || pickerBanner?.contains(event.target)) return;
+  hoveredPickerElement?.removeAttribute("data-big-video-picker-hover");
+  hoveredPickerElement = event.target;
+  event.target.setAttribute("data-big-video-picker-hover", "true");
+}
 
-  // Reset the working set immediately (before the async storage read) so that
-  // clicks registered before the callback fires are not lost when the Set
-  // reference is replaced.
-  pickerSelectors = new Set(cachedHiddenSelectors);
-  pickerSelectors.forEach((sel) => {
-    try { document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true")); } catch { /**/ }
-  });
+function onPickerClick(event: MouseEvent): void {
+  if (!(event.target instanceof HTMLElement) || pickerBanner?.contains(event.target)) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const clicked = event.target;
+  const selector = selectorFor(clicked);
+  if (pickerMode === "hide") {
+    const index = cachedHiddenSelectors.indexOf(selector);
+    if (index >= 0) cachedHiddenSelectors.splice(index, 1); else cachedHiddenSelectors.push(selector);
+    refreshHiddenSelectors();
+    return;
+  }
+  const media = clicked.closest<MediaElement>("video,iframe") ?? clicked.querySelector<MediaElement>("video,iframe");
+  const selected = media ?? clicked;
+  if (selected instanceof HTMLVideoElement || selected instanceof HTMLIFrameElement) registerTarget(selected, 120);
+  if (isTop) {
+    rememberedPlayerSelector = selectorFor(selected);
+    chrome.storage.sync.set({ [PLAYER_PREFIX + domain]: rememberedPlayerSelector });
+  } else postToParent({ source: "big-video", type: "player-picked", ratio: selected instanceof HTMLVideoElement ? ratioForElement(selected) : undefined, confidence: 120 });
+  stopPicker(false);
+}
 
-  // Sync with storage in case another tab updated the list after our last
-  // cachedHiddenSelectors refresh, then merge any extra selectors in.
-  chrome.storage.sync.get({ [HIDDEN_PREFIX + domain]: [] }, (result) => {
-    const stored = result[HIDDEN_PREFIX + domain] as string[];
-    stored.forEach((sel) => {
-      if (!pickerSelectors.has(sel)) {
-        pickerSelectors.add(sel);
-        try { document.querySelectorAll<HTMLElement>(sel).forEach((el) => el.setAttribute("data-bv-selected", "true")); } catch { /**/ }
-      }
-    });
-  });
+function onPickerKey(event: KeyboardEvent): void { if (event.key === "Escape") stopPicker(); }
 
+function startPicker(mode: PickerMode): void {
+  stopPicker(false);
+  pickerMode = mode;
   pickerStyle = document.createElement("style");
-  pickerStyle.textContent = `
-    [data-bv-hover]    { outline: 3px solid #5566ff !important; outline-offset: 2px !important; cursor: crosshair !important; }
-    [data-bv-selected] { outline: 3px solid #22cc77 !important; outline-offset: 2px !important; }
-  `;
-  document.head.appendChild(pickerStyle);
-
-  pickerBanner = document.createElement("div");
-  pickerBanner.setAttribute("data-bv-banner", "true");
-
-  // Start in the top-right corner as a compact floating pill (not full-width)
-  // so it's immediately out of the way. The user can drag it anywhere.
-  const bannerRight  = 16;
-  const bannerTop    = 16;
-  Object.assign(pickerBanner.style, {
-    position: "fixed",
-    top: `${bannerTop}px`,
-    right: `${bannerRight}px`,
-    left: "auto",
-    width: "max-content",
-    maxWidth: "calc(100vw - 32px)",
-    zIndex: String(Z_TOP),
-    background: "linear-gradient(135deg,#1a1a3e,#0d0d20)",
-    color: "#dde0ff", padding: "8px 12px", display: "flex",
-    alignItems: "center", gap: "8px",
-    fontFamily: "system-ui,-apple-system,sans-serif", fontSize: "13px",
-    border: "1px solid rgba(100,100,255,0.35)", borderRadius: "10px",
-    boxShadow: "0 4px 24px rgba(0,0,0,0.6)",
-    userSelect: "none",
-    cursor: "grab",
-  });
-
-  // ── Drag handle (⠿ icon) ──────────────────────────────────────────────────
-  const handle = document.createElement("span");
-  handle.textContent = "⠿";
-  Object.assign(handle.style, {
-    fontSize: "18px", opacity: "0.55", cursor: "grab", flexShrink: "0",
-    lineHeight: "1", touchAction: "none",
-  });
-
-  // Drag state
-  let dragging = false;
-  let dragOffsetX = 0;
-  let dragOffsetY = 0;
-
-  const onPointerMove = (e: PointerEvent) => {
-    if (!dragging || !pickerBanner) return;
-    const x = e.clientX - dragOffsetX;
-    const y = e.clientY - dragOffsetY;
-    pickerBanner.style.left   = `${Math.max(0, x)}px`;
-    pickerBanner.style.top    = `${Math.max(0, y)}px`;
-    pickerBanner.style.right  = "auto";
-    pickerBanner.style.bottom = "auto";
-  };
-  const onPointerUp = (e: PointerEvent) => {
-    if (!dragging) return;
-    dragging = false;
-    handle.releasePointerCapture(e.pointerId);
-    if (pickerBanner) pickerBanner.style.cursor = "grab";
-    handle.style.cursor = "grab";
-  };
-
-  handle.addEventListener("pointerdown", (e: PointerEvent) => {
-    if (!pickerBanner) return;
-    dragging = true;
-    const rect = pickerBanner.getBoundingClientRect();
-    dragOffsetX = e.clientX - rect.left;
-    dragOffsetY = e.clientY - rect.top;
-    handle.setPointerCapture(e.pointerId);
-    pickerBanner.style.cursor = "grabbing";
-    handle.style.cursor = "grabbing";
-    e.preventDefault();
-  });
-  handle.addEventListener("pointermove", onPointerMove);
-  handle.addEventListener("pointerup", onPointerUp);
-
-  const label = document.createElement("span");
-  label.innerHTML = "🎯 <strong>Picker</strong> — click to <strong>hide</strong> · click again to deselect · <kbd>Esc</kbd> done";
-  label.style.flex = "1";
-  label.style.whiteSpace = "nowrap";
-
-  const done = document.createElement("button");
-  done.textContent = "✓ Done";
-  Object.assign(done.style, {
-    padding: "4px 12px", background: "rgba(80,80,220,0.35)",
-    border: "1px solid rgba(120,120,255,0.5)", borderRadius: "6px",
-    color: "#fff", cursor: "pointer", fontSize: "12px", fontWeight: "700",
-    flexShrink: "0",
-  });
-  done.addEventListener("click", stopPicker);
-
-  pickerBanner.appendChild(handle);
-  pickerBanner.appendChild(label);
-  pickerBanner.appendChild(done);
-  document.body.appendChild(pickerBanner);
-
-  document.addEventListener("mouseover", onHover, true);
-  document.addEventListener("mouseout", onOut, true);
+  pickerStyle.textContent = `[data-big-video-picker-hover]{outline:3px solid #8b8ff5!important;outline-offset:2px!important;cursor:crosshair!important}`;
+  document.documentElement.appendChild(pickerStyle);
+  if (isTop) {
+    pickerBanner = document.createElement("div");
+    pickerBanner.dataset.bigVideoPicker = "true";
+    pickerBanner.textContent = mode === "player" ? "Select the video or player to remember. Press Esc to cancel." : "Select page elements to hide. Press Esc when finished.";
+    Object.assign(pickerBanner.style, { position: "fixed", top: "16px", right: "16px", zIndex: String(Z_TOP), maxWidth: "min(420px, calc(100vw - 32px))", padding: "10px 14px", borderRadius: "10px", border: "1px solid #7478c7", background: "#17182f", color: "#fff", font: "500 13px/1.45 system-ui,sans-serif", boxShadow: "0 6px 24px rgba(0,0,0,.55)" });
+    document.documentElement.appendChild(pickerBanner);
+  }
+  document.addEventListener("pointerover", onPickerHover, true);
   document.addEventListener("click", onPickerClick, true);
   document.addEventListener("keydown", onPickerKey, true);
+  if (mode === "player") for (const iframe of deepElements<HTMLIFrameElement>(document, "iframe")) postToChild(iframe, { source: "big-video", type: "start-player-picker" });
 }
 
-// Listen for messages from the popup
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.action === "startPicker") startPicker();
-  if (msg.action === "stopPicker") stopPicker();
+function handleFrameMessage(event: MessageEvent<FrameMessage>): void {
+  const message = event.data;
+  if (!message || message.source !== "big-video") return;
+  if (event.source === window.parent && !isTop) {
+    if (message.type === "expand") { const target = primaryTarget(); if (target) expandTarget(target, true); }
+    else if (message.type === "shrink" && activeTarget) shrinkTarget(activeTarget, true);
+    else if (message.type === "start-player-picker") startPicker("player");
+    else if (message.type === "stop-picker") stopPicker(false);
+    return;
+  }
+  const iframe = directChildFor(event.source);
+  if (!iframe) return;
+  if (message.type === "media-report" || message.type === "player-picked") {
+    const target = registerTarget(iframe, message.confidence ?? 80, message.ratio, true);
+    childTargets.set(iframe, target);
+    if (message.type === "player-picked") {
+      if (isTop) {
+        rememberedPlayerSelector = selectorFor(iframe);
+        chrome.storage.sync.set({ [PLAYER_PREFIX + domain]: rememberedPlayerSelector });
+        stopPicker(false);
+      } else postToParent(message);
+    }
+  } else if (message.type === "media-clear") {
+    const target = childTargets.get(iframe);
+    if (target && candidateConfidence(iframe) < 50 && !matchesRememberedPlayer(iframe)) removeTarget(iframe);
+  } else if (message.type === "ended") {
+    const target = childTargets.get(iframe);
+    if (target && activeTarget === target && autoShrinkOnEnd) {
+      if (isTop) shrinkTarget(target); else postToParent(message);
+    }
+  }
+}
+
+function maybeAutoExpand(): void {
+  if (!isTop || !autoExpandOnDomain || autoExpandFired || activeTarget) return;
+  const target = primaryTarget();
+  if (!target) return;
+  autoExpandFired = true;
+  requestAnimationFrame(() => expandTarget(target));
+}
+
+function initStorage(): void {
+  if (!isTop) return;
+  chrome.storage.sync.get({ [STORAGE_POSITION]: DEFAULT_POSITION, [STORAGE_SHRINK]: false, [HIDDEN_PREFIX + domain]: [], [AUTO_EXPAND_PREFIX + domain]: false, [PLAYER_PREFIX + domain]: "" }, (result) => {
+    currentPosition = result[STORAGE_POSITION] as ButtonPosition;
+    autoShrinkOnEnd = Boolean(result[STORAGE_SHRINK]);
+    cachedHiddenSelectors = result[HIDDEN_PREFIX + domain] as string[];
+    autoExpandOnDomain = Boolean(result[AUTO_EXPAND_PREFIX + domain]);
+    rememberedPlayerSelector = String(result[PLAYER_PREFIX + domain] ?? "");
+    scanRoot(document); maybeAutoExpand(); schedulePositions();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "sync") return;
+    if (changes[STORAGE_POSITION]) currentPosition = changes[STORAGE_POSITION].newValue as ButtonPosition;
+    if (changes[STORAGE_SHRINK]) autoShrinkOnEnd = Boolean(changes[STORAGE_SHRINK].newValue);
+    if (changes[HIDDEN_PREFIX + domain]) { cachedHiddenSelectors = changes[HIDDEN_PREFIX + domain].newValue as string[]; refreshHiddenSelectors(); }
+    if (changes[AUTO_EXPAND_PREFIX + domain]) { autoExpandOnDomain = Boolean(changes[AUTO_EXPAND_PREFIX + domain].newValue); if (!autoExpandOnDomain) autoExpandFired = false; maybeAutoExpand(); }
+    if (changes[PLAYER_PREFIX + domain]) { rememberedPlayerSelector = String(changes[PLAYER_PREFIX + domain].newValue ?? ""); scanRoot(document); }
+    schedulePositions();
+  });
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!isTop) return;
+  if (message?.action === "startHidePicker" || message?.action === "startPicker") startPicker("hide");
+  if (message?.action === "startPlayerPicker") startPicker("player");
+  if (message?.action === "getPageContext") { sendResponse({ domain, playerSelector: rememberedPlayerSelector, detectedCount: targets.size }); return true; }
 });
 
-// ─── Shrink button ────────────────────────────────────────────────────────────
+window.addEventListener("message", handleFrameMessage);
+window.addEventListener("scroll", schedulePositions, { passive: true, capture: true });
+window.addEventListener("resize", schedulePositions, { passive: true });
+window.visualViewport?.addEventListener("resize", schedulePositions, { passive: true });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape" && activeTarget) shrinkTarget(activeTarget); }, true);
 
-function createShrinkButton(): HTMLButtonElement {
-  const btn = document.createElement("button");
-  btn.setAttribute("data-big-video-shrink", "true");
-  btn.title = "Restore original size";
-  btn.innerText = "✕";
-  Object.assign(btn.style, {
-    position: "fixed", zIndex: String(Z_TOP), display: "none",
-    width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px`, padding: "0",
-    background: "rgba(10,10,20,0.75)", backdropFilter: "blur(8px)",
-    color: "#e0e0ff", border: "1px solid rgba(120,120,255,0.4)", borderRadius: "50%",
-    cursor: "pointer", fontSize: "16px", lineHeight: "1",
-    boxShadow: "0 4px 16px rgba(0,0,0,0.5)", fontFamily: "system-ui,-apple-system,sans-serif",
-    transition: "opacity 180ms,transform 180ms,background 180ms", opacity: "0.85",
-  });
-  btn.addEventListener("mouseenter", () => { btn.style.opacity = "1"; btn.style.transform = "scale(1.1)"; btn.style.background = "rgba(30,30,60,0.9)"; });
-  btn.addEventListener("mouseleave", () => { btn.style.opacity = "0.85"; btn.style.transform = "scale(1)"; btn.style.background = "rgba(10,10,20,0.75)"; });
-  return btn;
-}
-
-// ─── Iframe detection helpers ─────────────────────────────────────────────────
-
-const handledIframes = new WeakSet<HTMLIFrameElement>();
-const VIDEO_SRC_PATTERNS = [
-  /youtube\.com\/embed/, /youtu\.be/, /vimeo\.com\/video/, /player\.vimeo\.com/,
-  /dailymotion\.com\/embed/, /twitch\.tv\/embed/, /facebook\.com\/plugins\/video/,
-  /instagram\.com\/p\//, /tiktok\.com\/embed/, /rumble\.com\/embed/,
-  /odysee\.com\/\$/, /bitchute\.com\/embed/, /streamable\.com\/e\//,
-  /wistia\.com\/embed/, /loom\.com\/embed/, /drive\.google\.com\/file/,
-  // Third-party embed hosts used by anime / media streaming sites
-  /kwik\.cx\/e\//, /kwik\.si\/e\//, /kwik\.to\/e\//,
-  /mp4upload\.com\/embed/, /dood\.(?:watch|la|to|re|pm|stream)\/e\//,
-  /filemoon\.sx\/e\//, /streamlare\.com\/e\//, /mixdrop\.co\/e\//,
-  /vidplay\.online\/e\//, /vidstreaming\.io\/streaming\.php/, /gogo-stream\.com\/embed/,
-  /rapid-cloud\.co\/video-block\//, /megaf\.cc\/v\//, /streamtape\.com\/e\//,
-  /voe\.sx\/e\//, /upstream\.to\/e\//, /embedsito\.com\//,
-];
-
-/**
- * CSS class name patterns on ancestor elements that strongly suggest the
- * iframe is a video player (Bootstrap embed-responsive, common player wrappers,
- * aspect-ratio containers used by anime / media streaming sites).
- */
-const VIDEO_WRAPPER_CLASS_PATTERNS = [
-  /\bembed[-_]responsive\b/i,
-  /\bvideo[-_]?(container|wrapper|player|embed|frame|box)\b/i,
-  /\bplayer[-_]?(container|wrapper|embed|frame|box)?\b/i,
-  /\btheatre\b/i,
-  /\bcinema\b/i,
-  /\bwatch[-_]?(container|wrapper|player)?\b/i,
-  /\bstream[-_]?(container|wrapper|player)?\b/i,
-  /\bjw[-_]?player\b/i,
-  /\bplyr\b/i,
-  /\bvjs[-_]?tech\b/i,
-];
-
-function isInsideVideoWrapper(iframe: HTMLIFrameElement): boolean {
-  let el: HTMLElement | null = iframe.parentElement;
-  // Walk up at most 6 levels — enough to catch deeply nested Bootstrap wrappers
-  // without accidentally matching unrelated containers higher on the page.
-  for (let depth = 0; depth < 6 && el && el !== document.body; depth++) {
-    const classes = el.className;
-    if (typeof classes === "string" && VIDEO_WRAPPER_CLASS_PATTERNS.some((re) => re.test(classes))) {
-      return true;
-    }
-    el = el.parentElement;
-  }
-  return false;
-}
-
-function looksLikeVideoFrame(iframe: HTMLIFrameElement): boolean {
-  const src = iframe.src || iframe.getAttribute("src") || "";
-  if (!src) return false;
-  const allow = iframe.getAttribute("allow") || "";
-  if (/autoplay|fullscreen|picture-in-picture/i.test(allow)) return true;
-  if (VIDEO_SRC_PATTERNS.some((re) => re.test(src))) return true;
-  // Structural fallback: iframe sits inside a recognised video-wrapper element.
-  if (isInsideVideoWrapper(iframe)) return true;
-  return false;
-}
-
-// ─── Core: attach overlay buttons to a video iframe ───────────────────────────
-
-function attachButton(iframe: HTMLIFrameElement): void {
-  if (handledIframes.has(iframe)) return;
-  handledIframes.add(iframe);
-
-  const expandBtn = createExpandButton();
-  const shrinkBtn = createShrinkButton();
-  document.body.appendChild(expandBtn);
-  document.body.appendChild(shrinkBtn);
-
-  /** Positions both the expand button (when visible) and the shrink button
-   *  (when visible) to the current corner. Safe to call at any time. */
-  const updateBtnPositions = () => {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-
-    // ── Expand button: tracks the iframe corner while not expanded ──
-    const rect = iframe.getBoundingClientRect();
-    const inViewport = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < vh && rect.left < vw;
-    if (expandBtn.style.display !== "none") {
-      expandBtn.style.visibility = inViewport ? "visible" : "hidden";
-    }
-    const btnTop  = currentPosition.startsWith("top")  ? rect.top    + BTN_MARGIN : rect.bottom - BTN_SIZE - BTN_MARGIN;
-    const btnLeft = currentPosition.endsWith("left")   ? rect.left   + BTN_MARGIN : rect.right  - BTN_SIZE - BTN_MARGIN;
-    expandBtn.style.top  = `${btnTop}px`;
-    expandBtn.style.left = `${btnLeft}px`;
-
-    // ── Shrink button: tracks the chosen corner of the full viewport ──
-    const sTop  = currentPosition.startsWith("top")  ? BTN_MARGIN                  : vh - BTN_SIZE - BTN_MARGIN;
-    const sLeft = currentPosition.endsWith("left")   ? BTN_MARGIN                  : vw - BTN_SIZE - BTN_MARGIN;
-    shrinkBtn.style.top  = `${sTop}px`;
-    shrinkBtn.style.left = `${sLeft}px`;
-    // Clear old inset shorthands set by the original hardcoded style.
-    shrinkBtn.style.right  = "";
-    shrinkBtn.style.bottom = "";
-  };
-
-  // Alias so existing repositionFns registration still works.
-  const updateExpandBtnPos = updateBtnPositions;
-
-  repositionFns.push(updateBtnPositions);
-  requestAnimationFrame(updateBtnPositions);
-  window.addEventListener("scroll", updateBtnPositions, { passive: true, capture: true });
-  window.addEventListener("resize", updateBtnPositions, { passive: true });
-  new ResizeObserver(updateBtnPositions).observe(document.body);
-
-  const savedStyles = {
-    width: iframe.style.width, height: iframe.style.height, position: iframe.style.position,
-    top: iframe.style.top, left: iframe.style.left, right: iframe.style.right,
-    bottom: iframe.style.bottom, zIndex: iframe.style.zIndex,
-    maxWidth: iframe.style.maxWidth, maxHeight: iframe.style.maxHeight,
-  };
-
-  const expand = () => {
-    suppressPageStacking(iframe);
-    applyHiddenSelectors();
-
-    iframe.style.position = "fixed";
-    iframe.style.top = "0"; iframe.style.left = "0";
-    iframe.style.right = "0"; iframe.style.bottom = "0";
-    iframe.style.width = "100vw"; iframe.style.height = "100vh";
-    iframe.style.maxWidth = "100vw"; iframe.style.maxHeight = "100vh";
-    iframe.style.zIndex = String(Z_TOP);
-
-    expandBtn.style.display = "none";
-    shrinkBtn.style.display = "flex";
-    shrinkBtn.style.alignItems = "center";
-    shrinkBtn.style.justifyContent = "center";
-    updateBtnPositions(); // position shrink btn to correct corner immediately
-  };
-
-  const shrink = () => {
-    restoreBag(stackingOverrides);
-    removeHiddenSelectors();
-
-    iframe.style.position = savedStyles.position || "";
-    iframe.style.top = savedStyles.top || ""; iframe.style.left = savedStyles.left || "";
-    iframe.style.right = savedStyles.right || ""; iframe.style.bottom = savedStyles.bottom || "";
-    iframe.style.width = savedStyles.width || ""; iframe.style.height = savedStyles.height || "";
-    iframe.style.maxWidth = savedStyles.maxWidth || ""; iframe.style.maxHeight = savedStyles.maxHeight || "";
-    iframe.style.zIndex = savedStyles.zIndex || "";
-
-    shrinkBtn.style.display = "none";
-    expandBtn.style.display = "flex";
-    requestAnimationFrame(updateExpandBtnPos);
-  };
-
-  // ── Auto-shrink on video end ──────────────────────────────────────────────
-  // Four independent strategies fire in parallel; whichever triggers first wins.
-
-  let autoShrinkVideoEl: HTMLVideoElement | null = null;
-  let autoShrinkMsgHandler: ((e: MessageEvent) => void) | null = null;
-  let autoShrinkPollId: ReturnType<typeof setInterval> | null = null;
-  let autoShrinkTriggered = false; // prevent double-shrink if multiple strategies fire at once
-
-  /** Called by any strategy when it detects the video has ended. */
-  function onVideoEnded(): void {
-    if (!autoShrinkOnEnd || shrinkBtn.style.display === "none") return;
-    if (autoShrinkTriggered) return;
-    autoShrinkTriggered = true;
-    detachAutoShrinkListeners();
-    shrink();
-  }
-
-  function attachAutoShrinkListeners(): void {
-    if (!autoShrinkOnEnd) return;
-    autoShrinkTriggered = false;
-
-    // ── Strategy 1: Same-origin — attach `ended` event + near-end poll ──────
-    try {
-      const doc = iframe.contentDocument;
-      if (doc) {
-        const vid = doc.querySelector<HTMLVideoElement>("video");
-        if (vid) {
-          autoShrinkVideoEl = vid;
-          vid.addEventListener("ended", onVideoEnded, { once: true });
-
-          // Poll fallback: catches cases where `ended` already fired or is unreliable.
-          autoShrinkPollId = setInterval(() => {
-            if (!vid.duration || vid.paused || vid.ended) {
-              if (vid.ended) onVideoEnded();
-              return;
-            }
-            // Trigger when within 0.5 s of the end.
-            if (vid.duration - vid.currentTime <= 0.5) onVideoEnded();
-          }, 500);
-        }
-      }
-    } catch {
-      // Cross-origin — expected.
-    }
-
-    // ── Strategy 2: YouTube — inject enablejsapi + send listening handshake ──
-    // Without enablejsapi=1 in the src, YouTube won't emit postMessage events.
-    const src = iframe.src;
-    if (/youtube\.com\/embed|youtu\.be/.test(src) && iframe.contentWindow) {
-      try {
-        const url = new URL(src);
-        if (!url.searchParams.has("enablejsapi")) {
-          url.searchParams.set("enablejsapi", "1");
-          // Reassigning src reloads the iframe, so only do it once per session.
-          if (!iframe.dataset.bvJsApi) {
-            iframe.dataset.bvJsApi = "1";
-            iframe.src = url.toString();
-          }
-        }
-        // Send the listening handshake after a short delay (allow the player to load).
-        setTimeout(() => {
-          iframe.contentWindow?.postMessage(JSON.stringify({ event: "listening" }), "*");
-        }, 1500);
-      } catch { /* invalid URL */ }
-    }
-
-    // ── Strategy 3: postMessage — all major platforms ─────────────────────────
-    autoShrinkMsgHandler = (e: MessageEvent) => {
-      if (shrinkBtn.style.display === "none") return;
-      try {
-        let parsed: Record<string, unknown> | null = null;
-
-        if (typeof e.data === "string") {
-          try { parsed = JSON.parse(e.data) as Record<string, unknown>; } catch { return; }
-        } else if (typeof e.data === "object" && e.data !== null) {
-          parsed = e.data as Record<string, unknown>;
-        }
-
-        if (!parsed) return;
-
-        // YouTube IFrame API: playerState 0 = ended
-        //   With enablejsapi: { event:"onStateChange", info:0 }
-        //   Also seen:        { event:"infoDelivery", info:{ playerState:0 } }
-        if (parsed["event"] === "onStateChange" && parsed["info"] === 0) { onVideoEnded(); return; }
-        if (parsed["event"] === "infoDelivery") {
-          const info = parsed["info"] as Record<string, unknown> | undefined;
-          if (info && info["playerState"] === 0) { onVideoEnded(); return; }
-        }
-
-        // Vimeo Player SDK: { event:"finish" } or { method:"finish" }
-        if (parsed["event"] === "finish" || parsed["method"] === "finish") { onVideoEnded(); return; }
-
-        // Dailymotion: { type:"video_end" }
-        if (parsed["type"] === "video_end") { onVideoEnded(); return; }
-
-        // Twitch / generic: look for a "ended" or "end" signal
-        if (parsed["type"] === "video.ended" || parsed["event"] === "ended" || parsed["event"] === "end") { onVideoEnded(); return; }
-
-        // Wistia: { type:"betweentimes", ... } — no clean ended event; rely on poll.
-        // Streamable / Loom / others: check for a "complete" field
-        if (parsed["event"] === "complete" || parsed["type"] === "complete") { onVideoEnded(); return; }
-
-      } catch { /* ignore */ }
-    };
-    window.addEventListener("message", autoShrinkMsgHandler);
-  }
-
-  function detachAutoShrinkListeners(): void {
-    if (autoShrinkVideoEl) {
-      autoShrinkVideoEl.removeEventListener("ended", onVideoEnded);
-      autoShrinkVideoEl = null;
-    }
-    if (autoShrinkMsgHandler) {
-      window.removeEventListener("message", autoShrinkMsgHandler);
-      autoShrinkMsgHandler = null;
-    }
-    if (autoShrinkPollId !== null) {
-      clearInterval(autoShrinkPollId);
-      autoShrinkPollId = null;
-    }
-  }
-
-  expandBtn.addEventListener("click", () => { expand(); attachAutoShrinkListeners(); });
-  shrinkBtn.addEventListener("click", () => { detachAutoShrinkListeners(); shrink(); });
-
-  // ── Auto-expand on domain ────────────────────────────────────────────────
-  // Delay slightly to ensure the iframe is rendered before we expand.
-  if (autoExpandOnDomain && !autoExpandFired) {
-    autoExpandFired = true;
-    requestAnimationFrame(() => { expand(); attachAutoShrinkListeners(); });
-  }
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && shrinkBtn.style.display !== "none") {
-      detachAutoShrinkListeners();
-      shrink();
-    }
-  });
-}
-
-// ─── Discovery ────────────────────────────────────────────────────────────────
-
-function scanForVideoFrames(): void {
-  document.querySelectorAll<HTMLIFrameElement>("iframe").forEach((iframe) => {
-    if (looksLikeVideoFrame(iframe)) attachButton(iframe);
-  });
-}
-
-scanForVideoFrames();
-const observer = new MutationObserver(scanForVideoFrames);
-observer.observe(document.documentElement, { childList: true, subtree: true });
+initStorage();
+observeRoot(document);
+reportPrimary();

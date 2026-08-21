@@ -1,90 +1,66 @@
 # Local Setup
 
-## Source Code Build Instructions (for Reviewers)
+## Requirements
 
-These instructions outline how to build the extension from source to generate an exact copy of the submitted add-on code.
+- Node.js 20 or newer
+- Corepack
+- Chrome or Firefox for local testing
 
-### 1. Build Environment Requirements
-- **Operating System:** Linux or macOS (or Windows via WSL)
-- **Node.js:** v18.0.0 or higher
-- **System Utilities:** `jq` and `zip` are required by the packaging script.
+The release process is implemented in Node and does not require `jq`, `zip`, or platform-specific shell scripts.
 
-### 2. Program Installation
-- **Node.js**: Download and install from [nodejs.org](https://nodejs.org/) or use a version manager like `nvm` (`nvm install 18`).
-- **Yarn**: This project uses Yarn v4. Enable it via Node's Corepack:
-  ```bash
-  corepack enable
-  ```
-- **jq & zip**: Install via your system's package manager.
-  - Ubuntu/Debian: `sudo apt install jq zip`
-  - macOS (Homebrew): `brew install jq zip`
+## Install
 
-### 3. Step-by-Step Build Instructions
-
-1. Open your terminal and navigate to the root directory of the extracted source code.
-2. Install the project dependencies:
-   ```bash
-   yarn install
-   ```
-3. Run the automated build and packaging script:
-   ```bash
-   ./package.sh
-   ```
-
-### 4. Build Output
-The build script (`package.sh`) will compile the TypeScript code via Webpack, create the production assets in the `dist/` directory, and generate two release packages:
-- `releases/big-video-chrome-v[VERSION].zip`
-- `releases/big-video-firefox-v[VERSION].zip`
-
-The generated zip files contain the exact replica of the add-on code submitted to the store.
-
----
-
-## Development Commands
-
-- **Build once:** `yarn build` (outputs to `./dist`)
-- **Watch mode:** `yarn watch` (rebuilds on every save)
-
----
-
-## Loading in a Dev Environment
-
-### Chrome
-
-1. Open **`chrome://extensions`** in your browser.
-2. Toggle **Developer mode** on (top-right switch).
-3. Click **"Load unpacked"**.
-4. Select the **`dist/`** folder inside this repo.
-5. The extension icon should appear in your toolbar. Reload the tab after any rebuild.
-
-> **Tip:** With `yarn watch` running, just hit the ↺ refresh icon on the extension card in `chrome://extensions` after each save — no need to re-load unpacked.
-
----
-
-### Firefox
-
-1. Open **`about:debugging#/runtime/this-firefox`** in Firefox.
-2. Click **"Load Temporary Add-on…"**.
-3. Navigate to the **`dist/`** folder and select **`manifest.json`**.
-4. The extension is active until Firefox is closed. Reload it after each rebuild via the **Reload** button on the same page.
-
-> **Note:** Temporary add-ons are removed on browser restart. For persistent dev installs, sign the extension or use [Firefox Developer Edition](https://www.mozilla.org/en-US/firefox/developer/).
-
----
-
-## Project Structure
-
+```bash
+corepack yarn install --immutable
 ```
-src/
-├── content/
-│   └── content.ts       # Injected into every page; finds iframes & attaches buttons
-├── utils/
-│   └── customBtn.ts     # Factory function that creates the styled expand button
-├── popup/
-│   ├── popup.html
-│   └── popup.ts
-├── options/
-│   ├── options.html
-│   └── options.ts
-└── manifest.json
+
+## Quality Checks
+
+```bash
+corepack yarn test
+corepack yarn typecheck
+corepack yarn build
+corepack yarn test:e2e
 ```
+
+## Development Builds
+
+Build Chrome into `dist/chrome`:
+
+```bash
+corepack yarn build
+```
+
+Build Firefox into `dist/firefox`:
+
+```bash
+corepack yarn build:firefox
+```
+
+Use `corepack yarn watch` while developing the Chrome build.
+
+## Load in Chrome
+
+Open `chrome://extensions`, enable Developer mode, choose Load unpacked, and select `dist/chrome`.
+Reload the extension and the website tab after rebuilding.
+
+## Load in Firefox
+
+Open `about:debugging#/runtime/this-firefox`, choose Load Temporary Add-on, and select `dist/firefox/manifest.json`.
+Reload the temporary extension after rebuilding.
+
+## Create a Release
+
+```bash
+corepack yarn package
+```
+
+The command runs tests, type checking, both production builds, a loaded-extension Chrome regression, and strict Firefox manifest validation before changing the version.
+On success it increments the patch version in `package.json` and creates three deterministic archives:
+
+- `releases/big-video-chrome-vX.Y.Z.zip`
+- `releases/big-video-firefox-vX.Y.Z.zip`
+- `releases/big-video-firefox-source-vX.Y.Z.zip`
+
+The Firefox source archive contains the source code, tests, dependency lockfile, license, and these build instructions.
+A failed release leaves the version and existing release artifacts unchanged.

@@ -1,24 +1,35 @@
 {
   "name": "big-video",
+  "version": "0.4.1",
+  "private": true,
   "packageManager": "yarn@4.3.1",
+  "resolutions": {
+    "brace-expansion": "npm:1.1.18",
+    "fast-uri": "npm:3.1.5",
+    "lodash": "npm:4.18.1"
+  },
   "scripts": {
-    "build": "webpack --config webpack.config.mjs",
-    "watch": "webpack --config webpack.config.mjs --watch",
-    "dev": "webpack --config webpack.config.mjs --mode=development --watch --env TMPDIR/home/lightberry/bucket/big-video/tmp",
-    "package": "./package.sh"
+    "build": "webpack --config webpack.config.mjs --env browser=chrome",
+    "build:firefox": "webpack --config webpack.config.mjs --env browser=firefox",
+    "watch": "webpack --config webpack.config.mjs --mode=development --watch --env browser=chrome",
+    "dev": "webpack --config webpack.config.mjs --mode=development --watch --env browser=chrome",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e.mjs",
+    "typecheck": "tsc --noEmit",
+    "package": "node scripts/package.mjs"
   },
   "devDependencies": {
-    "@types/chrome": "^0.0.280",
-    "@types/firefox-webext-browser": "^120.0.4",
-    "clean-webpack-plugin": "^4.0.0",
-    "copy-webpack-plugin": "^12.0.2",
-    "html-webpack-plugin": "^5.6.3",
-    "ts-loader": "^9.5.1",
-    "web-ext-plugin": "^2.10.0",
-    "webpack": "^5.96.1",
-    "webpack-cli": "^5.1.4"
-  },
-  "dependencies": {
-    "typescript": "^5.6.3"
+    "@types/chrome": "^0.2.6",
+    "@types/firefox-webext-browser": "^143.0.0",
+    "copy-webpack-plugin": "^14.0.0",
+    "fflate": "^0.8.3",
+    "html-webpack-plugin": "^5.6.8",
+    "puppeteer-core": "^25.8.0",
+    "ts-loader": "^9.6.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "web-ext": "^10.6.0",
+    "webpack": "^5.109.2",
+    "webpack-cli": "^7.2.2"
   }
 }

@@ -1,29 +1,29 @@
 # Big Video
 
-![Big Video App Screenshot](github/Screen%20Shot%202026-05-04%20at%2015.46.05.png)
+![Big Video popup](github/Screen%20Shot%202026-05-04%20at%2015.46.05.png)
 
-> A browser extension that adds an **Expand / Shrink** button below embedded video iframes so you can blow them up to fill the entire viewport with a single click.
+Big Video is a Manifest V3 browser extension that fits native and embedded website videos to the browser viewport without cropping or stretching them.
+Browser tabs and toolbars remain visible, and one click restores the page to its original layout.
 
-Compatible with **Chrome** (MV3) and **Firefox** (126+).
+## Features
 
----
+- Detects native videos and deeply nested player frames.
+- Preserves landscape, portrait, square, and provider-reported aspect ratios.
+- Handles dynamically inserted players, delayed iframe sources, and open shadow roots.
+- Provides a remembered manual player picker when automatic detection is uncertain.
+- Supports per-site auto-expand, auto-shrink, and hidden-page-element settings.
+- Runs on current Chrome, Firefox, and Firefox ESR releases.
+- Collects and transmits no user data.
 
-## What can this extension do?
+## Development
 
-Big Video is designed to enhance your viewing experience on websites that embed video iframes but do not provide a native full-window mode. When an embedded video is detected, a convenient button is added just below the video. Clicking this button immediately expands the video to fill your entire browser window, without going into full-screen mode, allowing you to multitask or keep other tabs visible while enjoying a larger video. Clicking it again restores the video to its exact original dimensions and placement on the page.
+Install dependencies with `corepack yarn install`.
+Run unit tests with `corepack yarn test`.
+Run type checking with `corepack yarn typecheck`.
+Build Chrome with `corepack yarn build` and Firefox with `corepack yarn build:firefox`.
+Run the loaded-extension Chrome regression with `corepack yarn test:e2e` after building Chrome.
 
-### Features
-
-- **Automatic Detection:** Detects embedded video iframes automatically across various platforms (YouTube, Vimeo, Twitch, Dailymotion, Loom, and more).
-- **Dynamic Content Support:** Watches for dynamically injected iframes via `MutationObserver` — ensuring it works flawlessly on Single Page Applications (SPAs) and sites that load videos after the initial page load.
-- **Precise Restoration:** Restores the original iframe dimensions precisely when you shrink it back.
-- **Always Accessible:** The "Shrink" button sticks to the top of the viewport while the video is expanded, so it's always reachable.
-- **Smart Placement:** Handles video iframes nested inside complex layouts seamlessly.
-- **Lightweight:** Zero dependencies at runtime for fast performance.
-
-For development instructions, please refer to [localsetup.md](localsetup.md).
-
----
+See [localsetup.md](localsetup.md) for browser loading, testing, and release instructions.
 
 ## License
 

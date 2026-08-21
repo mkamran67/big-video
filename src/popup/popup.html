@@ -1,392 +1,118 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Big Video</title>
     <style>
-      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      body {
-        width: 272px;
-        background: #0c0c1a;
-        color: #dde0ff;
-        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-        overflow: hidden;
-      }
-
-      /* ── Settings panel scroll ───────────────────────────────── */
-      #panel-settings {
-        max-height: 520px;
-        overflow-y: auto;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(100,100,200,0.3) transparent;
-      }
-      #panel-settings::-webkit-scrollbar { width: 4px; }
-      #panel-settings::-webkit-scrollbar-track { background: transparent; }
-      #panel-settings::-webkit-scrollbar-thumb { background: rgba(100,100,200,0.3); border-radius: 2px; }
-
-      /* ── Header ─────────────────────────────────────────────── */
-      .header {
-        display: flex; align-items: center; gap: 11px;
-        padding: 16px 16px 14px;
-        border-bottom: 1px solid rgba(110,110,220,0.18);
-      }
-      .header-icon {
-        width: 36px; height: 36px; flex-shrink: 0;
-        background: linear-gradient(135deg,#2a2a6e,#1a1a40);
-        border: 1px solid rgba(110,110,220,0.35); border-radius: 10px;
-        display: flex; align-items: center; justify-content: center; font-size: 18px;
-      }
-      .header-title { font-size: 14px; font-weight: 700; }
-      .header-sub   { font-size: 11px; color: rgba(180,180,220,0.45); margin-top: 2px; }
-
-      /* ── Tab bar ─────────────────────────────────────────────── */
-      .tab-bar {
-        display: flex;
-        border-bottom: 1px solid rgba(110,110,220,0.18);
-        background: rgba(255,255,255,0.015);
-      }
-      .tab-btn {
-        flex: 1; padding: 9px 0;
-        background: none; border: none; border-bottom: 2px solid transparent;
-        color: rgba(180,180,220,0.45); font-size: 12px; font-weight: 600;
-        font-family: inherit; cursor: pointer; letter-spacing: 0.02em;
-        transition: color 150ms, border-color 150ms, background 150ms;
-      }
-      .tab-btn:hover { color: rgba(200,200,255,0.75); background: rgba(110,110,220,0.06); }
-      .tab-btn.active {
-        color: #c0c0ff;
-        border-bottom-color: rgba(120,120,255,0.85);
-        background: rgba(110,110,220,0.08);
-      }
-
-      /* ── Tab panels ──────────────────────────────────────────── */
-      .tab-panel { display: none; }
-      .tab-panel.active { display: block; }
-
-      /* ── Sections ────────────────────────────────────────────── */
-      .section { padding: 14px 16px; }
-      .section + .section { border-top: 1px solid rgba(110,110,220,0.12); }
-      .section-label {
-        font-size: 10px; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.1em; color: rgba(180,180,220,0.4); margin-bottom: 10px;
-      }
-      .section-label span {
-        float: right; text-transform: none; letter-spacing: 0;
-        font-size: 10px; font-weight: 500;
-        color: rgba(140,140,200,0.55);
-      }
-
-      /* ── Position picker frame ───────────────────────────────── */
-      .frame-wrap {
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(110,110,220,0.2);
-        border-radius: 10px; aspect-ratio: 16/9;
-        position: relative; overflow: hidden; margin-bottom: 10px;
-      }
-      .frame-wrap::before {
-        content: ''; position: absolute; inset: 0;
-        background: repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(110,110,220,0.03) 3px,rgba(110,110,220,0.03) 4px);
-        pointer-events: none;
-      }
-      .frame-center {
-        position: absolute; inset: 0; display: flex;
-        align-items: center; justify-content: center;
-        font-size: 28px; color: rgba(110,110,220,0.12);
-        pointer-events: none; user-select: none;
-      }
-      .pos-btn {
-        position: absolute; width: 34px; height: 34px;
-        background: rgba(100,100,200,0.08); border: 1px solid rgba(110,110,220,0.22);
-        border-radius: 50%; cursor: pointer;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 15px; color: rgba(180,180,220,0.4);
-        transition: background 160ms,border-color 160ms,color 160ms,box-shadow 160ms,transform 160ms;
-      }
-      .pos-btn:hover { background:rgba(100,100,220,0.2); border-color:rgba(110,110,255,0.5); color:#c8c8ff; transform:scale(1.08); }
-      .pos-btn.active { background:rgba(90,90,220,0.35); border-color:rgba(120,120,255,0.9); color:#fff; box-shadow:0 0 14px rgba(100,100,255,0.45); }
-      .pos-btn[data-pos="top-left"]     { top:8px;    left:8px; }
-      .pos-btn[data-pos="top-right"]    { top:8px;    right:8px; }
-      .pos-btn[data-pos="bottom-left"]  { bottom:8px; left:8px; }
-      .pos-btn[data-pos="bottom-right"] { bottom:8px; right:8px; }
-      .pos-label { font-size:12px; color:rgba(180,180,220,0.5); text-align:center; }
-      .pos-label strong { color:#a0a0ff; font-weight:600; }
-
-      /* ── Picker button ───────────────────────────────────────── */
-      .picker-btn {
-        display: flex; align-items: center; gap: 8px; width: 100%;
-        padding: 8px 12px;
-        background: rgba(100,100,200,0.1); border: 1px solid rgba(110,110,220,0.25);
-        border-radius: 8px; color: #c0c0ff; cursor: pointer;
-        font-size: 12px; font-weight: 600; font-family: inherit;
-        transition: background 160ms, border-color 160ms;
-        margin-bottom: 10px;
-      }
-      .picker-btn:hover { background:rgba(100,100,220,0.2); border-color:rgba(110,110,255,0.5); }
-      .picker-btn .icon { font-size: 14px; }
-
-      /* ── Selectors list ──────────────────────────────────────── */
-      .selectors-list { display: flex; flex-direction: column; gap: 5px; max-height: 120px; overflow-y: auto; }
-      .selectors-list::-webkit-scrollbar { width: 4px; }
-      .selectors-list::-webkit-scrollbar-track { background: transparent; }
-      .selectors-list::-webkit-scrollbar-thumb { background: rgba(100,100,200,0.3); border-radius: 2px; }
-      .selector-item {
-        display: flex; align-items: center; gap: 6px;
-        padding: 5px 8px;
-        background: rgba(255,255,255,0.03); border: 1px solid rgba(110,110,220,0.15);
-        border-radius: 6px;
-      }
-      .selector-text {
-        flex: 1; font-size: 11px; color: rgba(200,200,240,0.7);
-        font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-      .del-btn {
-        flex-shrink: 0; width: 18px; height: 18px; padding: 0;
-        background: rgba(200,60,60,0.15); border: 1px solid rgba(200,60,60,0.25);
-        border-radius: 4px; color: rgba(255,120,120,0.8); cursor: pointer;
-        font-size: 10px; line-height: 1; display: flex; align-items: center; justify-content: center;
-        transition: background 140ms;
-      }
-      .del-btn:hover { background: rgba(200,60,60,0.35); color: #ff8888; }
-      .empty-msg { font-size: 11px; color: rgba(180,180,220,0.3); text-align: center; padding: 6px 0; }
-
-      /* ── Toggle row ──────────────────────────────────────────── */
-      .toggle-row {
-        display: flex; align-items: center; justify-content: space-between;
-        gap: 10px;
-      }
-      .toggle-label {
-        font-size: 12px; color: rgba(200,200,240,0.75); line-height: 1.3;
-      }
-      .toggle-label small {
-        display: block; font-size: 10px; color: rgba(180,180,220,0.35); margin-top: 1px;
-      }
-      .switch {
-        position: relative; flex-shrink: 0; width: 38px; height: 22px;
-      }
-      .switch input { opacity: 0; width: 0; height: 0; }
-      .slider {
-        position: absolute; cursor: pointer; inset: 0;
-        background: rgba(100,100,150,0.25); border: 1px solid rgba(110,110,220,0.25);
-        border-radius: 22px; transition: background 200ms, border-color 200ms;
-      }
-      .slider::before {
-        content: ''; position: absolute;
-        width: 14px; height: 14px; left: 3px; top: 3px;
-        background: rgba(180,180,220,0.55); border-radius: 50%;
-        transition: transform 200ms, background 200ms;
-      }
-      .switch input:checked + .slider {
-        background: rgba(90,90,220,0.45); border-color: rgba(120,120,255,0.8);
-        box-shadow: 0 0 10px rgba(100,100,255,0.35);
-      }
-      .switch input:checked + .slider::before {
-        transform: translateX(16px); background: #c8c8ff;
-      }
-
-      /* ── About tab ───────────────────────────────────────────── */
-      .about-hero {
-        display: flex; flex-direction: column; align-items: center;
-        padding: 22px 16px 16px; gap: 8px;
-        border-bottom: 1px solid rgba(110,110,220,0.12);
-      }
-      .about-icon {
-        width: 52px; height: 52px;
-        background: linear-gradient(135deg,#2a2a6e,#1a1a40);
-        border: 1px solid rgba(110,110,220,0.4); border-radius: 14px;
-        display: flex; align-items: center; justify-content: center; font-size: 26px;
-        box-shadow: 0 4px 24px rgba(80,80,200,0.25);
-      }
-      .about-name { font-size: 15px; font-weight: 700; color: #dde0ff; }
-      .about-version {
-        font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
-        color: rgba(140,140,200,0.5); text-transform: uppercase;
-      }
-      .about-desc {
-        font-size: 11.5px; color: rgba(200,200,240,0.6); line-height: 1.55;
-        text-align: center; padding: 0 4px;
-      }
-
-      .about-features {
-        padding: 14px 16px;
-        border-bottom: 1px solid rgba(110,110,220,0.12);
-        display: flex; flex-direction: column; gap: 8px;
-      }
-      .feature-item {
-        display: flex; align-items: flex-start; gap: 9px;
-      }
-      .feature-icon {
-        font-size: 14px; flex-shrink: 0; margin-top: 1px;
-        filter: drop-shadow(0 0 4px rgba(120,120,255,0.4));
-      }
-      .feature-text { font-size: 11.5px; color: rgba(200,200,240,0.65); line-height: 1.45; }
-
-      .about-contact {
-        padding: 14px 16px 16px;
-      }
-      .contact-label {
-        font-size: 10px; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.1em; color: rgba(180,180,220,0.4); margin-bottom: 10px;
-      }
-      .contact-card {
-        display: flex; align-items: center; gap: 10px;
-        padding: 10px 12px;
-        background: rgba(100,100,200,0.08);
-        border: 1px solid rgba(110,110,220,0.22);
-        border-radius: 10px;
-      }
-      .contact-avatar {
-        width: 32px; height: 32px; flex-shrink: 0;
-        background: linear-gradient(135deg,#3a3a8e,#1a1a50);
-        border: 1px solid rgba(120,120,255,0.35); border-radius: 50%;
-        display: flex; align-items: center; justify-content: center; font-size: 15px;
-      }
-      .contact-email {
-        flex: 1; min-width: 0;
-        font-size: 11px; color: rgba(180,180,240,0.7);
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-      .contact-link {
-        flex-shrink: 0;
-        padding: 5px 10px;
-        background: rgba(90,90,220,0.25); border: 1px solid rgba(120,120,255,0.4);
-        border-radius: 6px; color: #b0b0ff; font-size: 10.5px; font-weight: 600;
-        font-family: inherit; cursor: pointer; text-decoration: none;
-        transition: background 150ms, border-color 150ms;
-        white-space: nowrap;
-      }
-      .contact-link:hover { background: rgba(90,90,220,0.4); border-color: rgba(140,140,255,0.7); color: #d0d0ff; }
-
-      /* ── Footer ──────────────────────────────────────────────── */
-      .footer {
-        padding: 9px 16px 11px;
-        border-top: 1px solid rgba(110,110,220,0.12);
-        font-size: 10px; color: rgba(180,180,220,0.25); text-align: center;
-      }
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { width: 304px; margin: 0; background: #0d0e1d; color: #f1f2ff; font-size: 13px; }
+      button, input { font: inherit; }
+      button { color: inherit; }
+      :focus-visible { outline: 2px solid #aeb1ff; outline-offset: 2px; }
+      .header { display: flex; align-items: center; gap: 11px; padding: 16px; border-bottom: 1px solid #292b4c; }
+      .logo { width: 36px; height: 36px; border-radius: 9px; }
+      .title { margin: 0; font-size: 15px; line-height: 1.2; }
+      .subtitle { margin: 3px 0 0; color: #b7bad3; font-size: 11px; }
+      .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #292b4c; }
+      .tab { padding: 10px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #aeb1ca; cursor: pointer; font-weight: 650; }
+      .tab:hover { background: #17182d; color: #fff; }
+      .tab[aria-selected="true"] { border-bottom-color: #8f93ff; background: #181a34; color: #fff; }
+      .panel[hidden] { display: none; }
+      .section { padding: 14px 16px; border-bottom: 1px solid #252743; }
+      .section-title { margin: 0 0 10px; color: #d5d7ee; font-size: 12px; font-weight: 700; }
+      .status { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 11px; border: 1px solid #34375f; border-radius: 9px; background: #15172c; }
+      .status-domain { overflow: hidden; color: #fff; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+      .status-count { color: #c7c9e3; font-variant-numeric: tabular-nums; }
+      .status-note { grid-column: 1 / -1; margin: 0; color: #adb0ca; font-size: 11px; line-height: 1.4; }
+      .actions { display: grid; gap: 8px; margin-top: 10px; }
+      .action { width: 100%; padding: 9px 11px; border: 1px solid #4b4f89; border-radius: 8px; background: #202345; cursor: pointer; font-weight: 650; text-align: left; }
+      .action:hover { border-color: #8589e8; background: #292d58; }
+      .action.secondary { border-color: #383b64; background: #17192f; color: #d4d6ed; }
+      .saved-player { display: flex; align-items: center; gap: 8px; margin-top: 9px; color: #c5c7df; font-size: 11px; }
+      .saved-player[hidden] { display: none; }
+      .saved-player span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .clear { padding: 4px 7px; border: 1px solid #50547d; border-radius: 6px; background: transparent; cursor: pointer; }
+      .positions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+      .pos-btn { min-height: 38px; border: 1px solid #3b3e67; border-radius: 8px; background: #17192f; color: #c7c9df; cursor: pointer; font-size: 16px; }
+      .pos-btn:hover { border-color: #7478c7; background: #202342; }
+      .pos-btn[aria-pressed="true"] { border-color: #9ca0ff; background: #303465; color: #fff; }
+      .position-label { margin: 8px 0 0; color: #b8bad0; font-size: 11px; text-align: center; }
+      .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 2px 0; }
+      .toggle-row + .toggle-row { margin-top: 14px; padding-top: 14px; border-top: 1px solid #252743; }
+      .toggle-copy { color: #f0f1ff; line-height: 1.3; }
+      .toggle-copy small { display: block; margin-top: 3px; color: #aeb1ca; font-size: 11px; line-height: 1.35; }
+      .switch { position: relative; flex: 0 0 auto; width: 42px; height: 24px; }
+      .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+      .track { position: absolute; inset: 0; border: 1px solid #535677; border-radius: 999px; background: #2a2c42; pointer-events: none; }
+      .track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #c7c9dc; transition: transform 160ms ease-out, background 160ms ease-out; }
+      .switch input:checked + .track { border-color: #9ca0ff; background: #5056aa; }
+      .switch input:checked + .track::before { transform: translateX(18px); background: #fff; }
+      .switch input:focus-visible + .track { outline: 2px solid #aeb1ff; outline-offset: 2px; }
+      .footer { padding: 10px 16px 12px; color: #979ab6; font-size: 10.5px; line-height: 1.4; text-align: center; }
+      .about { padding: 20px 18px; }
+      .about h2 { margin: 0 0 8px; font-size: 16px; }
+      .version { color: #b8bad0; font-size: 11px; }
+      .about p { color: #c7c9df; line-height: 1.55; }
+      .about ul { padding-left: 19px; color: #d4d6e9; line-height: 1.6; }
+      .contact { display: inline-block; margin-top: 5px; color: #bec1ff; }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
     </style>
   </head>
   <body>
-    <!-- Header -->
-    <div class="header">
-      <div class="header-icon">🎬</div>
-      <div>
-        <div class="header-title">Big Video</div>
-        <div class="header-sub">Expand embedded videos</div>
-      </div>
-    </div>
-
-    <!-- Tab bar -->
-    <div class="tab-bar">
-      <button class="tab-btn active" id="tab-settings" data-tab="settings">⚙ Settings</button>
-      <button class="tab-btn"        id="tab-about"    data-tab="about">ℹ About</button>
-    </div>
-
-    <!-- ═══════════════ SETTINGS TAB ═══════════════ -->
-    <div class="tab-panel active" id="panel-settings">
-
-      <!-- Position section -->
-      <div class="section">
-        <div class="section-label">Expand Button Position</div>
-        <div class="frame-wrap">
-          <div class="frame-center">▶</div>
-          <button class="pos-btn" data-pos="top-left"     title="Top Left">↖</button>
-          <button class="pos-btn" data-pos="top-right"    title="Top Right">↗</button>
-          <button class="pos-btn" data-pos="bottom-left"  title="Bottom Left">↙</button>
-          <button class="pos-btn" data-pos="bottom-right" title="Bottom Right">↘</button>
-        </div>
-        <p class="pos-label">Position: <strong id="pos-label">Top Right</strong></p>
-      </div>
-
-      <!-- Element hider section -->
-      <div class="section">
-        <div class="section-label">
-          Hide Elements on Expand
-          <span id="domain-badge"></span>
-        </div>
-        <button class="picker-btn" id="picker-btn">
-          <span class="icon">🎯</span> Pick elements to hide
-        </button>
-        <div class="selectors-list" id="selectors-list">
-          <p class="empty-msg">No elements hidden for this site</p>
-        </div>
-      </div>
-
-      <!-- Auto-shrink section -->
-      <div class="section">
-        <div class="toggle-row">
-          <div class="toggle-label">
-            Auto-shrink on video end
-            <small>Restore original size when the video finishes</small>
+    <header class="header">
+      <img class="logo" src="icons/icon48.png" alt="" />
+      <div><h1 class="title">Big Video</h1><p class="subtitle">Fit video to the browser viewport</p></div>
+    </header>
+    <nav class="tabs" role="tablist" aria-label="Big Video sections">
+      <button class="tab" id="tab-settings" role="tab" aria-selected="true" aria-controls="panel-settings" tabindex="0" data-tab="settings">Settings</button>
+      <button class="tab" id="tab-about" role="tab" aria-selected="false" aria-controls="panel-about" tabindex="-1" data-tab="about">About</button>
+    </nav>
+    <main>
+      <section class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings">
+        <div class="section">
+          <h2 class="section-title">Current page</h2>
+          <div class="status" aria-live="polite">
+            <span class="status-domain" id="domain">Checking page...</span>
+            <span class="status-count" id="detected-count"></span>
+            <p class="status-note" id="status-note">Looking for video players.</p>
           </div>
-          <label class="switch" title="Toggle auto-shrink">
-            <input type="checkbox" id="auto-shrink-toggle" />
-            <span class="slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Auto-expand section -->
-      <div class="section">
-        <div class="toggle-row">
-          <div class="toggle-label">
-            Auto-expand on this domain
-            <small id="auto-expand-domain-label">Expand the first video automatically</small>
+          <div class="actions">
+            <button class="action" id="player-picker" type="button">Choose a video player</button>
+            <button class="action secondary" id="hide-picker" type="button">Choose page elements to hide</button>
           </div>
-          <label class="switch" title="Toggle auto-expand for this domain">
-            <input type="checkbox" id="auto-expand-toggle" />
-            <span class="slider"></span>
-          </label>
+          <div class="saved-player" id="saved-player" hidden><span>Custom player remembered for this site</span><button class="clear" id="clear-player" type="button">Remove</button></div>
         </div>
-      </div>
-
-      <div class="footer">Changes apply instantly · hidden elements saved per site</div>
-    </div>
-
-    <!-- ═══════════════ ABOUT TAB ═══════════════ -->
-    <div class="tab-panel" id="panel-about">
-
-      <!-- Hero -->
-      <div class="about-hero">
-        <div class="about-icon">🎬</div>
-        <div class="about-name">Big Video</div>
-        <div class="about-version" id="about-version">v0.0.0</div>
-        <p class="about-desc">
-          A lightweight browser extension that lets you expand any embedded video iframe to full-screen with a single click — no sign-in, no tracking, no fuss.
-        </p>
-      </div>
-
-      <!-- Features -->
-      <div class="about-features">
-        <div class="feature-item">
-          <span class="feature-icon">🔍</span>
-          <span class="feature-text">Auto-detects YouTube, Vimeo, Twitch, Dailymotion &amp; more</span>
+        <div class="section">
+          <h2 class="section-title">Control position</h2>
+          <div class="positions" aria-label="Expand control position">
+            <button class="pos-btn" type="button" data-pos="top-left" aria-label="Top left" aria-pressed="false">↖</button>
+            <button class="pos-btn" type="button" data-pos="top-right" aria-label="Top right" aria-pressed="false">↗</button>
+            <button class="pos-btn" type="button" data-pos="bottom-left" aria-label="Bottom left" aria-pressed="false">↙</button>
+            <button class="pos-btn" type="button" data-pos="bottom-right" aria-label="Bottom right" aria-pressed="false">↘</button>
+          </div>
+          <p class="position-label" id="position-label">Top right</p>
         </div>
-        <div class="feature-item">
-          <span class="feature-icon">📌</span>
-          <span class="feature-text">Configurable button position — per browser profile</span>
+        <div class="section">
+          <div class="toggle-row">
+            <label class="toggle-copy" for="auto-shrink">Auto-shrink on video end<small>Restore the page when playback finishes</small></label>
+            <label class="switch"><input id="auto-shrink" type="checkbox" /><span class="track"></span></label>
+          </div>
+          <div class="toggle-row">
+            <label class="toggle-copy" for="auto-expand">Auto-expand on this site<small>Use the best visible player on each visit</small></label>
+            <label class="switch"><input id="auto-expand" type="checkbox" /><span class="track"></span></label>
+          </div>
         </div>
-        <div class="feature-item">
-          <span class="feature-icon">🙈</span>
-          <span class="feature-text">Hide distracting page elements while watching</span>
-        </div>
-        <div class="feature-item">
-          <span class="feature-icon">⚡</span>
-          <span class="feature-text">Auto-expand &amp; auto-shrink per domain</span>
-        </div>
-      </div>
-
-      <!-- Contact -->
-      <div class="about-contact">
-        <div class="contact-label">Feature Requests &amp; Feedback</div>
-        <div class="contact-card">
-          <div class="contact-avatar">✉️</div>
-          <div class="contact-email">me@mkamran.us</div>
-          <a class="contact-link" href="mailto:me@mkamran.us" target="_blank" rel="noopener">
-            Email ↗
-          </a>
-        </div>
-      </div>
-
-    </div>
-
+        <div class="footer">Settings sync with your browser profile. Big Video does not collect or transmit data.</div>
+      </section>
+      <section class="panel about" id="panel-about" role="tabpanel" aria-labelledby="tab-about" hidden>
+        <h2>Big Video</h2>
+        <div class="version" id="version">Version</div>
+        <p>Make native and embedded website videos as large as the tab allows while preserving their original aspect ratio.</p>
+        <ul><li>Native and nested player detection</li><li>No cropping or stretching</li><li>Remembered site-specific player selection</li><li>Keyboard-accessible controls</li></ul>
+        <a class="contact" href="mailto:me@mkamran.us">Send feedback</a>
+      </section>
+    </main>
   </body>
 </html>

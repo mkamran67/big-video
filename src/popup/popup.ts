@@ -1,142 +1,123 @@
 type ButtonPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
-const STORAGE_KEY = "buttonPosition";
-const STORAGE_KEY_SHRINK = "autoShrinkOnEnd";
-const HIDDEN_PREFIX = "bv_hidden_";
-const AUTO_EXPAND_PREFIX = "autoExpand_";
-const DEFAULT_POSITION: ButtonPosition = "top-right";
+interface PageContext {
+  domain: string;
+  playerSelector: string;
+  detectedCount: number;
+}
 
-const LABELS: Record<ButtonPosition, string> = {
-  "top-left": "Top Left", "top-right": "Top Right",
-  "bottom-left": "Bottom Left", "bottom-right": "Bottom Right",
+const STORAGE_POSITION = "buttonPosition";
+const STORAGE_SHRINK = "autoShrinkOnEnd";
+const AUTO_EXPAND_PREFIX = "autoExpand_";
+const PLAYER_PREFIX = "bv_player_";
+const DEFAULT_POSITION: ButtonPosition = "top-right";
+const POSITION_LABELS: Record<ButtonPosition, string> = {
+  "top-left": "Top left",
+  "top-right": "Top right",
+  "bottom-left": "Bottom left",
+  "bottom-right": "Bottom right",
 };
 
-// ─── Position picker ──────────────────────────────────────────────────────────
+let activeTabId: number | null = null;
+let activeDomain = "";
 
-function setActive(position: ButtonPosition): void {
-  document.querySelectorAll<HTMLElement>(".pos-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.pos === position);
+function setTab(name: string, focus = false): void {
+  document.querySelectorAll<HTMLButtonElement>("[role=tab]").forEach((tab) => {
+    const selected = tab.dataset.tab === name;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus();
   });
-  const label = document.getElementById("pos-label");
-  if (label) label.textContent = LABELS[position];
-}
-
-// ─── Element hider list ───────────────────────────────────────────────────────
-
-function renderList(selectors: string[], domain: string): void {
-  const list = document.getElementById("selectors-list")!;
-  list.innerHTML = "";
-  if (selectors.length === 0) {
-    list.innerHTML = '<p class="empty-msg">No elements hidden for this site</p>';
-    return;
-  }
-  selectors.forEach((sel, i) => {
-    const item = document.createElement("div");
-    item.className = "selector-item";
-
-    const text = document.createElement("span");
-    text.className = "selector-text";
-    text.textContent = sel;
-    text.title = sel;
-
-    const del = document.createElement("button");
-    del.className = "del-btn";
-    del.title = "Remove";
-    del.textContent = "✕";
-    del.addEventListener("click", () => {
-      const updated = selectors.filter((_, idx) => idx !== i);
-      chrome.storage.sync.set({ [HIDDEN_PREFIX + domain]: updated });
-    });
-
-    item.appendChild(text);
-    item.appendChild(del);
-    list.appendChild(item);
+  document.querySelectorAll<HTMLElement>("[role=tabpanel]").forEach((panel) => {
+    panel.hidden = panel.id !== `panel-${name}`;
   });
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+function setPosition(position: ButtonPosition): void {
+  document.querySelectorAll<HTMLButtonElement>(".pos-btn").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.pos === position));
+  });
+  const label = document.getElementById("position-label");
+  if (label) label.textContent = POSITION_LABELS[position];
+}
+
+function showUnavailable(): void {
+  document.getElementById("domain")!.textContent = "Unavailable on this page";
+  document.getElementById("detected-count")!.textContent = "";
+  document.getElementById("status-note")!.textContent = "Browser and extension pages do not allow video controls.";
+  document.querySelectorAll<HTMLButtonElement>("#player-picker,#hide-picker").forEach((button) => { button.disabled = true; });
+  (document.getElementById("auto-expand") as HTMLInputElement).disabled = true;
+}
+
+function renderPageContext(context: PageContext): void {
+  activeDomain = context.domain;
+  document.getElementById("domain")!.textContent = context.domain || "Current site";
+  document.getElementById("detected-count")!.textContent = `${context.detectedCount} found`;
+  document.getElementById("status-note")!.textContent = context.detectedCount
+    ? "Expand controls are shown over detected players."
+    : "No player detected yet. Choose one manually if video is present.";
+  document.getElementById("saved-player")!.hidden = !context.playerSelector;
+
+  const autoExpand = document.getElementById("auto-expand") as HTMLInputElement;
+  chrome.storage.sync.get({ [AUTO_EXPAND_PREFIX + activeDomain]: false }, (result) => {
+    autoExpand.checked = Boolean(result[AUTO_EXPAND_PREFIX + activeDomain]);
+  });
+}
+
+function sendAction(action: string): void {
+  if (activeTabId === null) return;
+  chrome.tabs.sendMessage(activeTabId, { action }, () => {
+    if (chrome.runtime.lastError) showUnavailable();
+    else window.close();
+  });
+}
 
 document.addEventListener("DOMContentLoaded", () => {
-  // ── Tab switching ────────────────────────────────────────────────────────
-  document.querySelectorAll<HTMLElement>(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const target = btn.dataset.tab!;
-      document.querySelectorAll<HTMLElement>(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === target));
-      document.querySelectorAll<HTMLElement>(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${target}`));
+  document.querySelectorAll<HTMLButtonElement>("[role=tab]").forEach((tab) => {
+    tab.addEventListener("click", () => setTab(tab.dataset.tab ?? "settings"));
+    tab.addEventListener("keydown", (event) => {
+      if (!event.key.startsWith("Arrow")) return;
+      event.preventDefault();
+      setTab(tab.dataset.tab === "settings" ? "about" : "settings", true);
     });
   });
 
-  // ── Version badge ────────────────────────────────────────────────────────
-  const versionEl = document.getElementById("about-version");
-  if (versionEl) {
-    const { version } = chrome.runtime.getManifest();
-    versionEl.textContent = `v${version}`;
-  }
+  document.getElementById("version")!.textContent = `Version ${chrome.runtime.getManifest().version}`;
 
-  // Position picker
-  chrome.storage.sync.get({ [STORAGE_KEY]: DEFAULT_POSITION }, (result) => {
-    setActive(result[STORAGE_KEY] as ButtonPosition);
+  chrome.storage.sync.get({ [STORAGE_POSITION]: DEFAULT_POSITION, [STORAGE_SHRINK]: false }, (result) => {
+    setPosition(result[STORAGE_POSITION] as ButtonPosition);
+    (document.getElementById("auto-shrink") as HTMLInputElement).checked = Boolean(result[STORAGE_SHRINK]);
   });
-  document.querySelectorAll<HTMLElement>(".pos-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const pos = btn.dataset.pos as ButtonPosition;
-      setActive(pos);
-      chrome.storage.sync.set({ [STORAGE_KEY]: pos });
+
+  document.querySelectorAll<HTMLButtonElement>(".pos-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const position = button.dataset.pos as ButtonPosition;
+      setPosition(position);
+      chrome.storage.sync.set({ [STORAGE_POSITION]: position });
     });
   });
 
-  // Auto-shrink toggle
-  const shrinkToggle = document.getElementById("auto-shrink-toggle") as HTMLInputElement | null;
-  if (shrinkToggle) {
-    chrome.storage.sync.get({ [STORAGE_KEY_SHRINK]: false }, (result) => {
-      shrinkToggle.checked = result[STORAGE_KEY_SHRINK] as boolean;
+  document.getElementById("auto-shrink")!.addEventListener("change", (event) => {
+    chrome.storage.sync.set({ [STORAGE_SHRINK]: (event.target as HTMLInputElement).checked });
+  });
+  document.getElementById("auto-expand")!.addEventListener("change", (event) => {
+    if (activeDomain) chrome.storage.sync.set({ [AUTO_EXPAND_PREFIX + activeDomain]: (event.target as HTMLInputElement).checked });
+  });
+  document.getElementById("player-picker")!.addEventListener("click", () => sendAction("startPlayerPicker"));
+  document.getElementById("hide-picker")!.addEventListener("click", () => sendAction("startHidePicker"));
+  document.getElementById("clear-player")!.addEventListener("click", () => {
+    if (!activeDomain) return;
+    chrome.storage.sync.remove(PLAYER_PREFIX + activeDomain, () => {
+      document.getElementById("saved-player")!.hidden = true;
     });
-    shrinkToggle.addEventListener("change", () => {
-      chrome.storage.sync.set({ [STORAGE_KEY_SHRINK]: shrinkToggle.checked });
-    });
-  }
+  });
 
-  // Element hider
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    if (!tab?.url || !tab.id) return;
-    let domain = "";
-    try { domain = new URL(tab.url).hostname; } catch { return; }
-
-    const badge = document.getElementById("domain-badge");
-    if (badge) badge.textContent = domain;
-
-    const storageKey = HIDDEN_PREFIX + domain;
-    const autoExpandKey = AUTO_EXPAND_PREFIX + domain;
-
-    // Load initial list
-    chrome.storage.sync.get({ [storageKey]: [] }, (result) => {
-      renderList(result[storageKey] as string[], domain);
-    });
-
-    // Live-update list if content script saves while popup is open
-    chrome.storage.onChanged.addListener((changes) => {
-      if (changes[storageKey]) {
-        renderList(changes[storageKey].newValue as string[], domain);
-      }
-    });
-
-    // Auto-expand toggle (per domain)
-    const autoExpandToggle = document.getElementById("auto-expand-toggle") as HTMLInputElement | null;
-    const autoExpandLabel  = document.getElementById("auto-expand-domain-label");
-    if (autoExpandLabel) autoExpandLabel.textContent = `Auto-expand for ${domain}`;
-    if (autoExpandToggle) {
-      chrome.storage.sync.get({ [autoExpandKey]: false }, (result) => {
-        autoExpandToggle.checked = result[autoExpandKey] as boolean;
-      });
-      autoExpandToggle.addEventListener("change", () => {
-        chrome.storage.sync.set({ [autoExpandKey]: autoExpandToggle.checked });
-      });
-    }
-
-    // Picker button — sends message then popup auto-closes
-    document.getElementById("picker-btn")?.addEventListener("click", () => {
-      chrome.tabs.sendMessage(tab.id!, { action: "startPicker" });
-      window.close();
+    if (typeof tab?.id !== "number") { showUnavailable(); return; }
+    activeTabId = tab.id;
+    chrome.tabs.sendMessage(tab.id, { action: "getPageContext" }, (context?: PageContext) => {
+      if (chrome.runtime.lastError || !context) showUnavailable();
+      else renderPageContext(context);
     });
   });
 });
